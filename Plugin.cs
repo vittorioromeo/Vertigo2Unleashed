@@ -13,7 +13,6 @@ using UnityEngine;
 using Debug = System.Diagnostics.Debug;
 using System;
 using System.Collections;
-using static GroundcoverGenerator.GroundCover;
 
 namespace Vertigo2Unleashed
 {
@@ -109,18 +108,18 @@ namespace Vertigo2Unleashed
             _configVirtualStockShoulderForward = Config.Bind("General",
                 "VirtualStockShoulderForward",
                 -0.1f,
-                "Starting from the player's head position, sets how many units forward the shoulder is");
+                "From the player's head position, sets how many units forward the shoulder is");
 
             _configVirtualStockShoulderRight = Config.Bind("General",
                 "VirtualStockShoulderRight",
                 0.25f,
-                "Starting from the player's head position, sets how many units rightwards the shoulder is" +
+                "From the player's head position, sets how many units rightwards the shoulder is" +
                 " (for left-handed players, this value should probably be negative)");
 
             _configVirtualStockShoulderUp = Config.Bind("General",
                 "VirtualStockShoulderUp",
                 -0.1f,
-                "Starting from the player's head position, sets how many units upwards the shoulder is");
+                "From the player's head position, sets how many units upwards the shoulder is");
 
             _configVirtualStockForwardDepth = Config.Bind("General",
                 "VirtualStockForwardDepth",
@@ -155,19 +154,42 @@ namespace Vertigo2Unleashed
         //
         //
         // ------------------------------------------------------------------------------------------------------------
+        // AWAKE
+        // ------------------------------------------------------------------------------------------------------------
+
+#pragma warning disable IDE0051
+        private void Awake()
+#pragma warning restore IDE0051
+        {
+            _logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
+
+            // --------------------------------------------------------------------------------------------------------
+            // HARMONY PATCHES
+            Harmony.CreateAndPatchAll(typeof(Plugin));
+            _logger.LogInfo($"Injected all Harmony patches");
+
+            // --------------------------------------------------------------------------------------------------------
+            // DAMAGE MULTIPLIERS
+            Enemy.ModifyDamage += (ref float damage) => { damage *= _configDamageMultiplierToEnemy.Value; };
+            VertigoPlayer.ModifyDamage += (ref float damage) => { damage *= _configDamageMultiplierToPlayer.Value; };
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
         // UTILS
         // ------------------------------------------------------------------------------------------------------------
 
-        private static object GetAndInvokePrivateMethod(string name, object instance, object[] args)
+        private static object GetAndInvokePrivateMethod(object instance, string name, object[] args = null)
         {
             var methodInfo =
                 instance.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
 
             Debug.Assert(methodInfo != null);
-            return methodInfo.Invoke(instance, args);
+            return methodInfo.Invoke(instance, args ?? new object[] { });
         }
 
-        private static object GetPrivatePropertyValue(string name, object instance)
+        private static object GetPrivatePropertyValue(object instance, string name)
         {
             var propertyInfo =
                 instance.GetType().GetProperty(name, BindingFlags.NonPublic | BindingFlags.Instance);
@@ -221,13 +243,13 @@ namespace Vertigo2Unleashed
             return false;
         }
 
-        private static void setInputSourceOverridesToDominant()
+        private static void SetInputSourceOverridesToDominant()
         {
             _weaponSwitcherInputSourceOverride = InputSourceDominant;
             _weaponSwitcherInputSourceOtherHandOverride = InputSourceNonDominant;
         }
 
-        private static void setInputSourceOverridesToNonDominant()
+        private static void SetInputSourceOverridesToNonDominant()
         {
             _weaponSwitcherInputSourceOverride = InputSourceNonDominant;
             _weaponSwitcherInputSourceOtherHandOverride = InputSourceDominant;
@@ -245,12 +267,12 @@ namespace Vertigo2Unleashed
 
             if (__instance.a_weaponSwitch.GetState(InputSourceDominant))
             {
-                setInputSourceOverridesToDominant();
+                SetInputSourceOverridesToDominant();
             }
 
             if (__instance.a_weaponSwitch.GetState(InputSourceNonDominant))
             {
-                setInputSourceOverridesToNonDominant();
+                SetInputSourceOverridesToNonDominant();
             }
 
             return true;
@@ -265,27 +287,28 @@ namespace Vertigo2Unleashed
         [SuppressMessage("ReSharper", "InconsistentNaming")]
         private static bool WeaponSwitcherMenuStartPatchPrefix(WeaponSwitcher __instance)
         {
-            GetAndInvokePrivateMethod("ResetPos", __instance, new object[] { });
+            GetAndInvokePrivateMethod(__instance, "ResetPos");
             __instance.ResetIcons();
-            GetAndInvokePrivateMethod("CheckSecretWeapons", __instance, new object[] { });
+            GetAndInvokePrivateMethod(__instance, "CheckSecretWeapons");
 
             var inputSource = OverridenInputSourceDominant;
 
             if (__instance.ActiveSlot != -1)
             {
                 var equipInputSource =
-                    ((EquippablesManager.EquippableInstance)GetPrivatePropertyValue("activeEquippable", __instance))
+                    ((EquippablesManager.EquippableInstance)GetPrivatePropertyValue(__instance, "activeEquippable"))
                     .eqip.inputSource;
 
-                var task = (IEnumerator)GetAndInvokePrivateMethod("IconToSpot", __instance, new object[]
+                var task = (IEnumerator)GetAndInvokePrivateMethod(__instance, "IconToSpot", new object[]
                 {
                     __instance.ActiveSlot,
                     equipInputSource
                 });
 
                 __instance.StartCoroutine(task);
-
                 __instance.manager.SwitchToEquippable(null, inputSource, false);
+
+                // Removed from original code:
                 // __instance.manager.SwitchToEquippable(null, inputSourceOtherHand, true);
             }
 
@@ -312,14 +335,17 @@ namespace Vertigo2Unleashed
             if (item == "Hands")
             {
                 __instance.manager.SwitchToEquippable(null, inputSource, false);
+
+                // Removed from original code:
                 // __instance.manager.SwitchToEquippable(null, __instance.inputSourceOtherHand, true);
+
                 __instance.au.PlayOneShot(__instance.au_close);
             }
             else
             {
                 var num = Array.IndexOf(__instance.slots, Array.Find(__instance.slots, s => s.name == item));
 
-                var resIconToHand = (IEnumerator)GetAndInvokePrivateMethod("IconToHand", __instance, new object[]
+                var resIconToHand = (IEnumerator)GetAndInvokePrivateMethod(__instance, "IconToHand", new object[]
                 {
                     num,
                     (num != -1 && __instance.slots[num].equippable.holdInOppositeHand)
@@ -371,15 +397,17 @@ namespace Vertigo2Unleashed
 
                 _clonedEquippableInstances[i].gameObject.SetActive(false);
 
-                if (___playerHeadCollider != null)
+                if (___playerHeadCollider == null)
                 {
-                    var componentsInChildren = _clonedEquippableInstances[i].gameObject
-                        .GetComponentsInChildren<Collider>(true);
+                    continue;
+                }
 
-                    foreach (var collider in componentsInChildren)
-                    {
-                        Physics.IgnoreCollision(collider, ___playerHeadCollider);
-                    }
+                var componentsInChildren = _clonedEquippableInstances[i].gameObject
+                    .GetComponentsInChildren<Collider>(true);
+
+                foreach (var collider in componentsInChildren)
+                {
+                    Physics.IgnoreCollision(collider, ___playerHeadCollider);
                 }
             }
         }
@@ -400,8 +428,7 @@ namespace Vertigo2Unleashed
             return false;
         }
 
-        private static bool _mustUpdateBelt;
-        private static SteamVR_Input_Sources _lastSwitchedSourceToNonNull = GameManager.Hand_Dominant;
+        private static bool _mustUpdateBelt; // When dual wielding, the belt must be updated whenever weapons change.
 
         [HarmonyPatch(typeof(EquippablesManager), "SwitchToEquippable")]
         [HarmonyPrefix]
@@ -413,11 +440,6 @@ namespace Vertigo2Unleashed
         {
             _mustUpdateBelt = true;
             autoSwitchOtherHand = false;
-
-            if (profile != null)
-            {
-                _lastSwitchedSourceToNonNull = forHand;
-            }
 
             if (!_configDualWieldingAllowClonedWeapons.Value)
             {
@@ -453,10 +475,10 @@ namespace Vertigo2Unleashed
                 return true;
             }
 
-            setInputSourceOverridesToDominant();
+            SetInputSourceOverridesToDominant();
             doHand(GameManager.Hand_Dominant, ref _oldEquippableDominant);
 
-            setInputSourceOverridesToNonDominant();
+            SetInputSourceOverridesToNonDominant();
             doHand(GameManager.Hand_NonDominant, ref _oldEquippableNonDominant);
 
             return true;
@@ -504,28 +526,21 @@ namespace Vertigo2Unleashed
             var dominantHand = equippablesManager.GetHand(GameManager.Hand_Dominant);
             var nonDominantHand = equippablesManager.GetHand(GameManager.Hand_NonDominant);
 
-            if (dominantHand.currentProfile == null && nonDominantHand.currentProfile == null)
-            {
-                return GameManager.Hand_Dominant;
-            }
-
-            if (dominantHand.currentProfile != null && nonDominantHand.currentProfile == null)
-            {
-                return GameManager.Hand_Dominant;
-            }
+            // The only "interesting" case for dual wielding is when the only hand that's holding a weapon is the
+            // non-dominant one.
 
             if (dominantHand.currentProfile == null && nonDominantHand.currentProfile != null)
             {
                 return GameManager.Hand_NonDominant;
             }
 
-            return _lastSwitchedSourceToNonNull;
+            return GameManager.Hand_Dominant;
         }
 
         [HarmonyPatch(typeof(AmmoBelt), "UpdateHandedness")]
         [HarmonyPrefix]
         [SuppressMessage("ReSharper", "InconsistentNaming")]
-        private static bool AmmoBeltUpdateHandednessPatchPrefix(AmmoBelt __instance, Transform ___pos_rightHip,
+        private static bool AmmoBeltUpdateHandednessPatchPrefix(Transform ___pos_rightHip,
             Transform ___pos_leftHip, Transform ___uiRoot)
         {
             if (!_configDualWieldingEnabled.Value)
@@ -533,9 +548,9 @@ namespace Vertigo2Unleashed
                 return true;
             }
 
-            var transform = (InputSourceForBelt() == GameManager.Hand_NonDominant) ? ___pos_rightHip : ___pos_leftHip;
-            ___uiRoot.transform.position = transform.position;
-            ___uiRoot.transform.rotation = transform.rotation;
+            var hip = (InputSourceForBelt() == GameManager.Hand_NonDominant) ? ___pos_rightHip : ___pos_leftHip;
+            ___uiRoot.transform.position = hip.position;
+            ___uiRoot.transform.rotation = hip.rotation;
 
             return false;
         }
@@ -543,7 +558,8 @@ namespace Vertigo2Unleashed
         [HarmonyPatch(typeof(AmmoBelt), "GetAmmoIndexForEquippable")]
         [HarmonyPrefix]
         [SuppressMessage("ReSharper", "InconsistentNaming")]
-        private static bool AmmoBeltGetAmmoIndexForEquippablePatchPrefix(ref int __result, ref EquippableProfile equippable)
+        private static bool AmmoBeltGetAmmoIndexForEquippablePatchPrefix(ref int __result,
+            ref EquippableProfile equippable)
         {
             if (!_configDualWieldingEnabled.Value)
             {
@@ -556,6 +572,8 @@ namespace Vertigo2Unleashed
 
             if (dominantHand.currentProfile != null && nonDominantHand.currentProfile != null)
             {
+                // Do not display the belt at all if both hands have a weapon equipped.
+
                 __result = -1;
                 return false;
             }
@@ -569,7 +587,7 @@ namespace Vertigo2Unleashed
         [SuppressMessage("ReSharper", "InconsistentNaming")]
         private static bool AmmoBeltUpdatePatchPrefix(AmmoBelt __instance)
         {
-            if (_mustUpdateBelt == true)
+            if (_mustUpdateBelt)
             {
                 _mustUpdateBelt = false;
                 __instance.UpdateBelt();
@@ -775,8 +793,8 @@ namespace Vertigo2Unleashed
 
             void registerCommand(string command, CommandHandler handler)
             {
-                GetAndInvokePrivateMethod("registerCommand", __instance,
-                    new object[] { command, handler, "Vertigo 2 Unleashed command" });
+                GetAndInvokePrivateMethod(__instance,
+                    "registerCommand", new object[] { command, handler, "Vertigo 2 Unleashed command" });
             }
 
             void registerSetConfigCommand(string command, ConfigEntry<float> configEntry)
@@ -788,29 +806,6 @@ namespace Vertigo2Unleashed
                     _configFile.Save();
                 });
             }
-        }
-
-        //
-        //
-        // ------------------------------------------------------------------------------------------------------------
-        // AWAKE
-        // ------------------------------------------------------------------------------------------------------------
-
-#pragma warning disable IDE0051
-        private void Awake()
-#pragma warning restore IDE0051
-        {
-            _logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
-
-            // --------------------------------------------------------------------------------------------------------
-            // HARMONY PATCHES
-            Harmony.CreateAndPatchAll(typeof(Plugin));
-            _logger.LogInfo($"Injected all Harmony patches");
-
-            // --------------------------------------------------------------------------------------------------------
-            // DAMAGE MULTIPLIERS
-            Enemy.ModifyDamage += (ref float damage) => { damage *= _configDamageMultiplierToEnemy.Value; };
-            VertigoPlayer.ModifyDamage += (ref float damage) => { damage *= _configDamageMultiplierToPlayer.Value; };
         }
     }
 }
