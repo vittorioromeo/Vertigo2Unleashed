@@ -1,0 +1,411 @@
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
+using BepInEx;
+using BepInEx.Configuration;
+using BepInEx.Logging;
+using HarmonyLib;
+using Vertigo2.Player;
+using Vertigo2;
+using HarmonyLib.Tools;
+using moveen.utils;
+using Valve.VR;
+using Vertigo2.Weapons;
+using UnityEngine;
+using Debug = System.Diagnostics.Debug;
+
+namespace Vertigo2Unleashed
+{
+    [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
+    public class Plugin : BaseUnityPlugin
+    {
+        private static ManualLogSource _logger;
+        private static ConfigFile _configFile;
+
+        private static ConfigEntry<bool> _configGripHolsterModeEnabled;
+
+        private static ConfigEntry<float> _configDamageMultiplierToEnemy;
+        private static ConfigEntry<float> _configDamageMultiplierToPlayer;
+        private static ConfigEntry<float> _configSpeedMultiplierPlayerWalk;
+        private static ConfigEntry<float> _configSpeedMultiplierPlayerSwim;
+
+        private static ConfigEntry<bool> _configVirtualStockEnabled;
+        private static ConfigEntry<float> _configVirtualStockStrength;
+        private static ConfigEntry<float> _configVirtualStockShoulderForward;
+        private static ConfigEntry<float> _configVirtualStockShoulderRight;
+        private static ConfigEntry<float> _configVirtualStockShoulderUp;
+        private static ConfigEntry<float> _configVirtualStockForwardDepth;
+        private static ConfigEntry<float> _configVirtualStockShoulderMaxDistance;
+
+        private static ConfigEntry<bool> _configRevolver2HGripEnabled;
+
+        private static EquippableProfile _oldEquippableDominant;
+        private static EquippableProfile _oldEquippableNonDominant;
+
+        public Plugin()
+        {
+            _logger = Logger;
+            _configFile = Config;
+
+            _configGripHolsterModeEnabled = Config.Bind("General",
+                "GripHolsterModeEnabled",
+                true,
+                "Enable grip-holster mode (automatically holsters weapons when the grip is released," +
+                " and equips the last holstered weapon when the grip is held)");
+
+            _configDamageMultiplierToEnemy = Config.Bind("General",
+                "DamageMultiplierToEnemy",
+                1.0f,
+                "Multiplier for damage inflicted to enemies (1.0 is the default)");
+
+            _configDamageMultiplierToPlayer = Config.Bind("General",
+                "DamageMultiplierToPlayer",
+                1.0f,
+                "Multiplier for damage inflicted to the player (1.0 is the default)");
+
+            _configSpeedMultiplierPlayerWalk = Config.Bind("General",
+                "SpeedMultiplierPlayerWalk",
+                1.0f,
+                "Multiplier for player walk speed (m/s, smooth locomotion)");
+
+            _configSpeedMultiplierPlayerSwim = Config.Bind("General",
+                "SpeedMultiplierPlayerSwim",
+                1.0f,
+                "Multiplier for player swim speed (m/s, smooth locomotion)");
+
+            _configVirtualStockEnabled = Config.Bind("General",
+                "VirtualStockEnabled",
+                true,
+                "Enable virtual stock for two-handed weapons (interpolates two-handed aiming angle " +
+                "with approximate shoulder position)");
+
+            _configVirtualStockStrength = Config.Bind("General",
+                "VirtualStockStrength",
+                0.5f,
+                "How strongly the shoulder position affects two-handed aiming " +
+                "(0.0: only the off-hand matters, shoulder is ignored) " +
+                "(1.0: only the shoulder matters, off-hand is ignored) " +
+                "(in-between values are blended)");
+
+            _configVirtualStockShoulderForward = Config.Bind("General",
+                "VirtualStockShoulderForward",
+                -0.1f,
+                "Starting from the player's head position, sets how many units forward the shoulder is");
+
+            _configVirtualStockShoulderRight = Config.Bind("General",
+                "VirtualStockShoulderRight",
+                0.25f,
+                "Starting from the player's head position, sets how many units rightwards the shoulder is" +
+                " (for left-handed players, this value should probably be negative)");
+
+            _configVirtualStockShoulderUp = Config.Bind("General",
+                "VirtualStockShoulderUp",
+                -0.1f,
+                "Starting from the player's head position, sets how many units upwards the shoulder is");
+
+            _configVirtualStockForwardDepth = Config.Bind("General",
+                "VirtualStockForwardDepth",
+                2.75f,
+                "Starting from the shoulder position, sets how many units forward the virtual stock " +
+                "interpolation point is");
+
+            _configVirtualStockShoulderMaxDistance = Config.Bind("General",
+                "VirtualStockShoulderMaxDistance",
+                0.4f,
+                "Maximum distance between the dominant hand and shoulder to enable virtual stock aiming " +
+                "(reverts to vanilla 2H aiming if exceeded)");
+
+            _configRevolver2HGripEnabled = Config.Bind("General",
+                "Revolver2HGripEnabled",
+                true,
+                "Enable two-handed aiming for the revolver (including virtual stock)");
+
+            HarmonyFileLog.Enabled = true;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // GRIP-HOLSTER MODE PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "Update")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool GripHolsterPatchPrefix(WeaponSwitcher __instance, bool ___openAllowed)
+        {
+            if (!_configGripHolsterModeEnabled.Value || __instance.menuOpen || !___openAllowed)
+            {
+                return true;
+            }
+
+            doHand(GameManager.Hand_Dominant, ref _oldEquippableDominant);
+            doHand(GameManager.Hand_NonDominant, ref _oldEquippableNonDominant);
+
+            return true;
+
+            void doHand(SteamVR_Input_Sources handType, ref EquippableProfile oldEquippable)
+            {
+                var hand = VertigoPlayer.instance.GetHand(handType);
+                var grabGripActionState = hand.a_grab_grip.GetState(hand.inputSource);
+                var grabGripActionLastState = hand.a_grab_grip.GetLastState(hand.inputSource);
+                var handEquippable = __instance.manager.GetHand(handType);
+
+                if (!grabGripActionState && handEquippable.currentProfile != null)
+                {
+                    oldEquippable = handEquippable.currentProfile;
+                    __instance.manager.SwitchToEquippable(null, handType, false);
+                    __instance.au.PlayOneShot(__instance.au_open);
+                }
+
+                if ((!grabGripActionLastState && grabGripActionState) // rising edge
+                    && oldEquippable != null
+                    && handEquippable.currentProfile == null
+                    && hand.hoveringInteractable == null
+                    && hand.attachedInteractable == null)
+                {
+                    __instance.manager.SwitchToEquippable(oldEquippable, handType, false);
+                    __instance.au.PlayOneShot(__instance.au_select);
+                }
+            }
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // SPEED MULTIPLIER PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        // For some reason I cannot patch `VertigoCharacterController.UpdateVelocity` directly, but
+        // this function seems to be called close to the beginning of `UpdateVelocity`.
+        [HarmonyPatch(typeof(VertigoCharacterController), "UpdateVelocityBuffer")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool SpeedMultiplierPlayerPatchPrefix(VertigoCharacterController __instance, object[] __args)
+        {
+            _ = __args;
+
+            // `3.0f` seems to be the hardcoded speed
+            __instance.walkSpeed = 3.0f * _configSpeedMultiplierPlayerWalk.Value;
+            __instance.swimSpeed = 3.0f * _configSpeedMultiplierPlayerSwim.Value;
+
+            return true;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // VIRTUAL STOCK PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        [HarmonyPatch(typeof(HeldEquippablePhysical), "FixedUpdate")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool VirtualStockPatchPrefix(HeldEquippablePhysical __instance,
+            Vector3 ___localHeldOrigin, Vector3 ___gunUpVector)
+        {
+            if (!_configVirtualStockEnabled.Value)
+            {
+                return true;
+            }
+
+            // The code below is mostly copy-pasted from Vertigo 2's disassembled DLL because I couldn't find a way
+            // to cleanly inject the virtual stock calculations in the middle of `HeldEquippablePhysical.FixedUpdate`.
+
+            if (Time.timeScale == 0f)
+            {
+                return false;
+            }
+
+            var num = 1f;
+
+            if (EquippablesManager.instance != null)
+            {
+                num *= EquippablesManager.instance.pickupFactor * EquippablesManager.instance.pickupFactor;
+            }
+
+            var a = __instance.controller.TransformPoint(___localHeldOrigin);
+
+            var quaternion = __instance.controller.rotation *
+                             Quaternion.Euler(GameManager.options.gameplay_gunAngle * 4f, 0f, 0f);
+
+            var attachedGrip = __instance.attachedGrip;
+
+            if (attachedGrip != null && attachedGrip.isForegrip)
+            {
+                var transform = attachedGrip.interactable.MainAttachPoint.transform;
+                var normalized =
+                    __instance.transform.InverseTransformPoint(transform.transform.position).normalized;
+
+                //
+                // ----------------------------------------------------------------------------------------------------
+                // CUSTOM CODE START
+
+                var dirWithoutVirtualStock = (attachedGrip.handgrabbing.handAnimator.CenterPosition_UnAnimated -
+                                              __instance.transform.position).normalized;
+
+                var headTransform = VertigoPlayer.instance.head.transform;
+
+                var shoulderPos = headTransform.position +
+                                  headTransform.forward.normalized * _configVirtualStockShoulderForward.Value +
+                                  headTransform.right.normalized * _configVirtualStockShoulderRight.Value +
+                                  headTransform.up.normalized * _configVirtualStockShoulderUp.Value;
+
+                var shoulderInterpolationPos =
+                    shoulderPos + headTransform.forward.normalized * _configVirtualStockForwardDepth.Value;
+
+                var dirWithVirtualStock = (shoulderInterpolationPos - __instance.transform.position).normalized;
+
+                var dominantHand = VertigoPlayer.instance.GetHand(GameManager.Hand_Dominant);
+
+                if ((shoulderPos - dominantHand.transform.position).magnitude >
+                    _configVirtualStockShoulderMaxDistance.Value)
+                {
+                    // Disable virtual stock
+                    dirWithVirtualStock = dirWithoutVirtualStock;
+                }
+
+                var dirFinal = Vector3.Lerp(dirWithoutVirtualStock, dirWithVirtualStock,
+                    _configVirtualStockStrength.Value).normalized;
+
+                var quaternion2 = Math3d.LookRotationQuatExtended(dirFinal,
+                    __instance.controller.TransformDirection(___gunUpVector), normalized,
+                    ___gunUpVector);
+
+                // CUSTOM CODE END
+                // ----------------------------------------------------------------------------------------------------
+                //
+
+                var num2 = Mathf.InverseLerp(200f, 0f, Quaternion.Angle(quaternion2,
+                    __instance.controller.rotation));
+
+                num2 = Mathf.Clamp01(num2);
+                quaternion = Quaternion.Slerp(quaternion, quaternion2, Mathf.Pow(num2, 0.3f));
+            }
+
+            var quaternion3 = quaternion * Quaternion.Inverse(__instance.transform.rotation);
+            var a2 = Vector3.zero;
+
+            quaternion3.ToAngleAxis(out var num3, out var vector);
+
+            if (num3 > 180f)
+            {
+                num3 -= 360f;
+            }
+
+            if (num3 != 0f && !float.IsNaN(vector.x) && !float.IsInfinity(vector.x))
+            {
+                a2 = num3 * vector;
+            }
+
+            __instance.rigidbody.angularVelocity +=
+                a2 * Time.fixedDeltaTime * 35f * num * __instance.attachTorqueMultiplier;
+
+            __instance.rigidbody.angularVelocity -= Vector3.ClampMagnitude(
+                __instance.rigidbody.angularVelocity * Time.fixedDeltaTime * 50f * num,
+                __instance.rigidbody.angularVelocity.magnitude * 0.9f);
+
+            var a3 = a - __instance.heldOrigin.position;
+
+            __instance.rigidbody.AddForceAtPosition(800f * a3 * num * __instance.attachForceMultiplier,
+                __instance.heldOrigin.position, ForceMode.Acceleration);
+
+            var pointVelocity = __instance.rigidbody.GetPointVelocity(__instance.heldOrigin.position);
+
+            __instance.rigidbody.AddForceAtPosition(
+                Vector3.ClampMagnitude(-30f * pointVelocity * num,
+                    pointVelocity.magnitude / Time.fixedDeltaTime * 0.8f), __instance.heldOrigin.position,
+                ForceMode.Acceleration);
+
+            return false;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // 2H AIMING PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        [HarmonyPatch(typeof(Revolver), "GunUpdate")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool RevolverTwoHandedPatchPrefix(Revolver __instance)
+        {
+            if (_configRevolver2HGripEnabled.Value)
+            {
+                ((HeldEquippablePhysical)__instance.heldEquippable).secondHandGrips[1].isForegrip = true;
+            }
+
+            return true;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // CONSOLE PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        [HarmonyPatch(typeof(ConsoleController), "Init")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool ConsoleInitPatchPrefix(ConsoleController __instance)
+        {
+            var registerCommandMethodInfo
+                = __instance.GetType().GetMethod("registerCommand",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+
+            Debug.Assert(registerCommandMethodInfo != null);
+
+            void registerCommand(string command, CommandHandler handler)
+            {
+                registerCommandMethodInfo.Invoke(__instance,
+                    new object[] { command, handler, "Vertigo 2 Unleashed command" });
+            }
+
+            void registerSetConfigCommand(string command, ConfigEntry<float> configEntry)
+            {
+                registerCommand(command, args =>
+                {
+                    configEntry.Value = float.Parse(args[0]);
+                    __instance.Log("Set config value to " + args[0], false);
+                    _configFile.Save();
+                });
+            }
+
+            registerSetConfigCommand("v2u_set_dmgmult_to_enemy", _configDamageMultiplierToEnemy);
+            registerSetConfigCommand("v2u_set_dmgmult_to_player", _configDamageMultiplierToPlayer);
+
+            registerSetConfigCommand("v2u_set_spdmult_player_walk", _configSpeedMultiplierPlayerWalk);
+            registerSetConfigCommand("v2u_set_spdmult_player_swim", _configSpeedMultiplierPlayerSwim);
+
+            registerSetConfigCommand("v2u_set_vstock_strength", _configVirtualStockStrength);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_forward", _configVirtualStockShoulderForward);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_right", _configVirtualStockShoulderRight);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_up", _configVirtualStockShoulderUp);
+            registerSetConfigCommand("v2u_set_vstock_forward_depth", _configVirtualStockForwardDepth);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_max_distance", _configVirtualStockShoulderMaxDistance);
+
+            return true;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // AWAKE
+        // ------------------------------------------------------------------------------------------------------------
+
+        private void Awake()
+        {
+            _logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
+
+            // --------------------------------------------------------------------------------------------------------
+            // HARMONY PATCHES
+            Harmony.CreateAndPatchAll(typeof(Plugin));
+            _logger.LogInfo($"Injected all Harmony patches");
+
+            // --------------------------------------------------------------------------------------------------------
+            // DAMAGE MULTIPLIERS
+            Enemy.ModifyDamage += (ref float damage) => { damage *= _configDamageMultiplierToEnemy.Value; };
+            VertigoPlayer.ModifyDamage += (ref float damage) => { damage *= _configDamageMultiplierToPlayer.Value; };
+        }
+    }
+}
