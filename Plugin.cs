@@ -7,19 +7,32 @@ using HarmonyLib;
 using Vertigo2.Player;
 using Vertigo2;
 using HarmonyLib.Tools;
-using moveen.utils;
 using Valve.VR;
 using Vertigo2.Weapons;
 using UnityEngine;
 using Debug = System.Diagnostics.Debug;
+using System;
+using System.Collections;
 
 namespace Vertigo2Unleashed
 {
     [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
     public class Plugin : BaseUnityPlugin
     {
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // GLOBALS
+        // ------------------------------------------------------------------------------------------------------------
+
         private static ManualLogSource _logger;
         private static ConfigFile _configFile;
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // CONFIG ENTRIES
+        // ------------------------------------------------------------------------------------------------------------
 
         private static ConfigEntry<bool> _configGripHolsterModeEnabled;
 
@@ -38,8 +51,14 @@ namespace Vertigo2Unleashed
 
         private static ConfigEntry<bool> _configRevolver2HGripEnabled;
 
-        private static EquippableProfile _oldEquippableDominant;
-        private static EquippableProfile _oldEquippableNonDominant;
+        private static ConfigEntry<bool> _configDualWieldingEnabled;
+        private static ConfigEntry<bool> _configDualWieldingAllowClonedWeapons;
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // CONSTRUCTOR
+        // ------------------------------------------------------------------------------------------------------------
 
         public Plugin()
         {
@@ -119,7 +138,290 @@ namespace Vertigo2Unleashed
                 true,
                 "Enable two-handed aiming for the revolver (including virtual stock)");
 
+            _configDualWieldingEnabled = Config.Bind("General",
+                "DualWieldingEnabled",
+                true,
+                "Enable dual wielding (requires 'weapon switch' action bound to both hands in SteamVR)");
+
+            _configDualWieldingAllowClonedWeapons = Config.Bind("General",
+                "DualWieldingAllowClonedWeapons",
+                true,
+                "Allows dual wielding two clones of the same weapon");
+
             HarmonyFileLog.Enabled = true;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // UTILS
+        // ------------------------------------------------------------------------------------------------------------
+
+        private static object GetAndInvokePrivateMethod(string name, object instance, object[] args)
+        {
+            var methodInfo =
+                instance.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
+
+            Debug.Assert(methodInfo != null);
+            return methodInfo.Invoke(instance, args);
+        }
+
+        private static object GetPrivatePropertyValue(string name, object instance)
+        {
+            var propertyInfo =
+                instance.GetType().GetProperty(name, BindingFlags.NonPublic | BindingFlags.Instance);
+
+            Debug.Assert(propertyInfo != null);
+            return propertyInfo.GetValue(instance);
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // DUAL WIELDING PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        // Basically, I dynamically the weapon selection wheel "input source" depending on what hand was used to open
+        // the weapon selection wheel UI. By overriding `inputSource` and `inputSourceOtherHand` I am able to have a
+        // per-hand fully functional weapon wheel. 
+
+        private static SteamVR_Input_Sources _weaponSwitcherInputSourceOverride;
+        private static SteamVR_Input_Sources _weaponSwitcherInputSourceOtherHandOverride;
+
+        private static SteamVR_Input_Sources InputSourceDominant =>
+            VertigoPlayer.instance.GetHand(GameManager.Hand_Dominant).inputSource;
+
+        private static SteamVR_Input_Sources InputSourceNonDominant =>
+            VertigoPlayer.instance.GetHand(GameManager.Hand_NonDominant).inputSource;
+
+        private static SteamVR_Input_Sources OverridenInputSourceDominant => _configDualWieldingEnabled.Value
+            ? _weaponSwitcherInputSourceOverride
+            : InputSourceDominant;
+
+        private static SteamVR_Input_Sources OverridenInputSourceNonDominant => _configDualWieldingEnabled.Value
+            ? _weaponSwitcherInputSourceOtherHandOverride
+            : InputSourceNonDominant;
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "inputSource", MethodType.Getter)]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool WeaponSwitcherInputSourceGetterPatchPrefix(ref SteamVR_Input_Sources __result)
+        {
+            __result = OverridenInputSourceDominant;
+            return false;
+        }
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "inputSourceOtherHand", MethodType.Getter)]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool WeaponSwitcherInputSourceOtherHandGetterPatchPrefix(ref SteamVR_Input_Sources __result)
+        {
+            __result = OverridenInputSourceNonDominant;
+            return false;
+        }
+
+        private static void setInputSourceOverridesToDominant()
+        {
+            _weaponSwitcherInputSourceOverride = InputSourceDominant;
+            _weaponSwitcherInputSourceOtherHandOverride = InputSourceNonDominant;
+        }
+
+        private static void setInputSourceOverridesToNonDominant()
+        {
+            _weaponSwitcherInputSourceOverride = InputSourceNonDominant;
+            _weaponSwitcherInputSourceOtherHandOverride = InputSourceDominant;
+        }
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "Update")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool DualWieldingWeaponSwitchPatchPrefix(WeaponSwitcher __instance)
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return true;
+            }
+
+            if (__instance.a_weaponSwitch.GetState(InputSourceDominant))
+            {
+                setInputSourceOverridesToDominant();
+            }
+
+            if (__instance.a_weaponSwitch.GetState(InputSourceNonDominant))
+            {
+                setInputSourceOverridesToNonDominant();
+            }
+
+            return true;
+        }
+
+        // Now I had to patch out the annoying behavior that holsters BOTH hands if the "hands" icon is selected in ANY
+        // weapon selection wheel. The code below is mostly copy-pasted from the disassembly, and I just commented the
+        // few annoying lines.
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "MenuStart")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool WeaponSwitcherMenuStartPatchPrefix(WeaponSwitcher __instance)
+        {
+            GetAndInvokePrivateMethod("ResetPos", __instance, new object[] { });
+            __instance.ResetIcons();
+            GetAndInvokePrivateMethod("CheckSecretWeapons", __instance, new object[] { });
+
+            var inputSource = OverridenInputSourceDominant;
+
+            if (__instance.ActiveSlot != -1)
+            {
+                var equipInputSource =
+                    ((EquippablesManager.EquippableInstance)GetPrivatePropertyValue("activeEquippable", __instance))
+                    .eqip.inputSource;
+
+                var task = (IEnumerator)GetAndInvokePrivateMethod("IconToSpot", __instance, new object[]
+                {
+                    __instance.ActiveSlot,
+                    equipInputSource
+                });
+
+                __instance.StartCoroutine(task);
+
+                __instance.manager.SwitchToEquippable(null, inputSource, false);
+                // __instance.manager.SwitchToEquippable(null, inputSourceOtherHand, true);
+            }
+
+            __instance.cursorPos = Vector2.zero;
+            __instance.au.PlayOneShot(__instance.au_open);
+
+            return false;
+        }
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "SelectedItem")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool WeaponSwitcherSelectedItemPatchPrefix(WeaponSwitcher __instance, string item,
+            bool ___openAllowed)
+        {
+            if (__instance.menuOpen || !___openAllowed)
+            {
+                return false;
+            }
+
+            var inputSource = OverridenInputSourceDominant;
+            var inputSourceOtherHand = OverridenInputSourceNonDominant;
+
+            if (item == "Hands")
+            {
+                __instance.manager.SwitchToEquippable(null, inputSource, false);
+                // __instance.manager.SwitchToEquippable(null, __instance.inputSourceOtherHand, true);
+                __instance.au.PlayOneShot(__instance.au_close);
+            }
+            else
+            {
+                var num = Array.IndexOf(__instance.slots, Array.Find(__instance.slots, s => s.name == item));
+
+                var resIconToHand = (IEnumerator)GetAndInvokePrivateMethod("IconToHand", __instance, new object[]
+                {
+                    num,
+                    (num != -1 && __instance.slots[num].equippable.holdInOppositeHand)
+                        ? inputSourceOtherHand
+                        : inputSource
+                });
+
+                __instance.au.PlayOneShot(__instance.au_select);
+                __instance.StartCoroutine(resIconToHand);
+            }
+
+            __instance.action_haptic.Execute(0f, 0.3f, 10f, 0.8f, inputSource);
+            return false;
+        }
+
+        // Would also be nice to patch `WeaponPickup.Pickup` to allow both hands to pick up weapons, but it's not that
+        // important.
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // DUAL WIELDING CLONED WEAPONS PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        // To make it possible to dual wield weapon duplicates, I had to create a separate array to instantiate all the
+        // weapon prefabs twice. I then inject this array in `FindInstanceForProfile` only when the weapon selection
+        // wheel was opened from the non-dominant hand.
+
+        private static EquippablesManager.EquippableInstance[] _clonedEquippableInstances;
+
+        [HarmonyPatch(typeof(EquippablesManager), "Start")]
+        [HarmonyPostfix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static void DualWieldingEquippablesManagerPatchPostfix(EquippablesManager __instance,
+            Collider ___playerHeadCollider)
+        {
+            _clonedEquippableInstances = new EquippablesManager.EquippableInstance[__instance.equippableCount];
+
+            for (var i = 0; i < __instance.equippableCount; ++i)
+            {
+                if (__instance.allEquippables[i].prefab == null)
+                {
+                    continue;
+                }
+
+                _clonedEquippableInstances[i] = new EquippablesManager.EquippableInstance(
+                    Instantiate(__instance.allEquippables[i].prefab, VertigoPlayer.instance.playArea),
+                    __instance.allEquippables[i]);
+
+                _clonedEquippableInstances[i].gameObject.SetActive(false);
+
+                if (___playerHeadCollider != null)
+                {
+                    var componentsInChildren = _clonedEquippableInstances[i].gameObject
+                        .GetComponentsInChildren<Collider>(true);
+
+                    foreach (var collider in componentsInChildren)
+                    {
+                        Physics.IgnoreCollision(collider, ___playerHeadCollider);
+                    }
+                }
+            }
+        }
+
+        [HarmonyPatch(typeof(EquippablesManager), "FindInstanceForProfile")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool DualWieldingEquippablesManagerInstancePatchPrefix(EquippableProfile prof,
+            ref EquippablesManager.EquippableInstance __result)
+        {
+            if (!_configDualWieldingAllowClonedWeapons.Value ||
+                _weaponSwitcherInputSourceOverride != InputSourceNonDominant)
+            {
+                return true;
+            }
+
+            __result = Array.Find(_clonedEquippableInstances, e => e.profile == prof);
+            return false;
+        }
+
+        [HarmonyPatch(typeof(EquippablesManager), "SwitchToEquippable")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool DualWieldingEquippablesManagerSwitchToEquippablePatchPrefix(EquippablesManager __instance,
+            EquippableProfile profile,
+            SteamVR_Input_Sources forHand,
+            ref bool autoSwitchOtherHand)
+        {
+            autoSwitchOtherHand = false;
+
+            if (!_configDualWieldingAllowClonedWeapons.Value)
+            {
+                var oppositeForHand = forHand == GameManager.Hand_Dominant
+                    ? GameManager.Hand_NonDominant
+                    : GameManager.Hand_Dominant;
+
+                if (__instance.GetHand(oppositeForHand).currentProfile == profile)
+                {
+                    __instance.SwitchToEquippable(null, oppositeForHand, false);
+                }
+            }
+
+            return true;
         }
 
         //
@@ -127,6 +429,9 @@ namespace Vertigo2Unleashed
         // ------------------------------------------------------------------------------------------------------------
         // GRIP-HOLSTER MODE PATCHES
         // ------------------------------------------------------------------------------------------------------------
+
+        private static EquippableProfile _oldEquippableDominant;
+        private static EquippableProfile _oldEquippableNonDominant;
 
         [HarmonyPatch(typeof(WeaponSwitcher), "Update")]
         [HarmonyPrefix]
@@ -138,7 +443,10 @@ namespace Vertigo2Unleashed
                 return true;
             }
 
+            setInputSourceOverridesToDominant();
             doHand(GameManager.Hand_Dominant, ref _oldEquippableDominant);
+
+            setInputSourceOverridesToNonDominant();
             doHand(GameManager.Hand_NonDominant, ref _oldEquippableNonDominant);
 
             return true;
@@ -349,15 +657,9 @@ namespace Vertigo2Unleashed
         [SuppressMessage("ReSharper", "InconsistentNaming")]
         private static bool ConsoleInitPatchPrefix(ConsoleController __instance)
         {
-            var registerCommandMethodInfo
-                = __instance.GetType().GetMethod("registerCommand",
-                    BindingFlags.NonPublic | BindingFlags.Instance);
-
-            Debug.Assert(registerCommandMethodInfo != null);
-
             void registerCommand(string command, CommandHandler handler)
             {
-                registerCommandMethodInfo.Invoke(__instance,
+                GetAndInvokePrivateMethod("registerCommand", __instance,
                     new object[] { command, handler, "Vertigo 2 Unleashed command" });
             }
 
