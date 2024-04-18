@@ -13,6 +13,7 @@ using UnityEngine;
 using Debug = System.Diagnostics.Debug;
 using System;
 using System.Collections;
+using static GroundcoverGenerator.GroundCover;
 
 namespace Vertigo2Unleashed
 {
@@ -399,6 +400,9 @@ namespace Vertigo2Unleashed
             return false;
         }
 
+        private static bool _mustUpdateBelt;
+        private static SteamVR_Input_Sources _lastSwitchedSourceToNonNull = GameManager.Hand_Dominant;
+
         [HarmonyPatch(typeof(EquippablesManager), "SwitchToEquippable")]
         [HarmonyPrefix]
         [SuppressMessage("ReSharper", "InconsistentNaming")]
@@ -407,7 +411,13 @@ namespace Vertigo2Unleashed
             SteamVR_Input_Sources forHand,
             ref bool autoSwitchOtherHand)
         {
+            _mustUpdateBelt = true;
             autoSwitchOtherHand = false;
+
+            if (profile != null)
+            {
+                _lastSwitchedSourceToNonNull = forHand;
+            }
 
             if (!_configDualWieldingAllowClonedWeapons.Value)
             {
@@ -475,6 +485,97 @@ namespace Vertigo2Unleashed
                     __instance.au.PlayOneShot(__instance.au_select);
                 }
             }
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // DUAL WIELDING AMMO BELT PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        private static SteamVR_Input_Sources InputSourceForBelt()
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return GameManager.Hand_Dominant;
+            }
+
+            var equippablesManager = VertigoPlayer.instance.equippablesManager;
+            var dominantHand = equippablesManager.GetHand(GameManager.Hand_Dominant);
+            var nonDominantHand = equippablesManager.GetHand(GameManager.Hand_NonDominant);
+
+            if (dominantHand.currentProfile == null && nonDominantHand.currentProfile == null)
+            {
+                return GameManager.Hand_Dominant;
+            }
+
+            if (dominantHand.currentProfile != null && nonDominantHand.currentProfile == null)
+            {
+                return GameManager.Hand_Dominant;
+            }
+
+            if (dominantHand.currentProfile == null && nonDominantHand.currentProfile != null)
+            {
+                return GameManager.Hand_NonDominant;
+            }
+
+            return _lastSwitchedSourceToNonNull;
+        }
+
+        [HarmonyPatch(typeof(AmmoBelt), "UpdateHandedness")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool AmmoBeltUpdateHandednessPatchPrefix(AmmoBelt __instance, Transform ___pos_rightHip,
+            Transform ___pos_leftHip, Transform ___uiRoot)
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return true;
+            }
+
+            var transform = (InputSourceForBelt() == GameManager.Hand_NonDominant) ? ___pos_rightHip : ___pos_leftHip;
+            ___uiRoot.transform.position = transform.position;
+            ___uiRoot.transform.rotation = transform.rotation;
+
+            return false;
+        }
+
+        [HarmonyPatch(typeof(AmmoBelt), "GetAmmoIndexForEquippable")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool AmmoBeltGetAmmoIndexForEquippablePatchPrefix(ref int __result, ref EquippableProfile equippable)
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return true;
+            }
+
+            var equippablesManager = VertigoPlayer.instance.equippablesManager;
+            var dominantHand = equippablesManager.GetHand(GameManager.Hand_Dominant);
+            var nonDominantHand = equippablesManager.GetHand(GameManager.Hand_NonDominant);
+
+            if (dominantHand.currentProfile != null && nonDominantHand.currentProfile != null)
+            {
+                __result = -1;
+                return false;
+            }
+
+            equippable = equippablesManager.GetHand(InputSourceForBelt()).currentProfile;
+            return true;
+        }
+
+        [HarmonyPatch(typeof(AmmoBelt), "Update")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool AmmoBeltUpdatePatchPrefix(AmmoBelt __instance)
+        {
+            if (_mustUpdateBelt == true)
+            {
+                _mustUpdateBelt = false;
+                __instance.UpdateBelt();
+            }
+
+            return true;
         }
 
         //
@@ -657,6 +758,21 @@ namespace Vertigo2Unleashed
         [SuppressMessage("ReSharper", "InconsistentNaming")]
         private static bool ConsoleInitPatchPrefix(ConsoleController __instance)
         {
+            registerSetConfigCommand("v2u_set_dmgmult_to_enemy", _configDamageMultiplierToEnemy);
+            registerSetConfigCommand("v2u_set_dmgmult_to_player", _configDamageMultiplierToPlayer);
+
+            registerSetConfigCommand("v2u_set_spdmult_player_walk", _configSpeedMultiplierPlayerWalk);
+            registerSetConfigCommand("v2u_set_spdmult_player_swim", _configSpeedMultiplierPlayerSwim);
+
+            registerSetConfigCommand("v2u_set_vstock_strength", _configVirtualStockStrength);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_forward", _configVirtualStockShoulderForward);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_right", _configVirtualStockShoulderRight);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_up", _configVirtualStockShoulderUp);
+            registerSetConfigCommand("v2u_set_vstock_forward_depth", _configVirtualStockForwardDepth);
+            registerSetConfigCommand("v2u_set_vstock_shoulder_max_distance", _configVirtualStockShoulderMaxDistance);
+
+            return true;
+
             void registerCommand(string command, CommandHandler handler)
             {
                 GetAndInvokePrivateMethod("registerCommand", __instance,
@@ -672,21 +788,6 @@ namespace Vertigo2Unleashed
                     _configFile.Save();
                 });
             }
-
-            registerSetConfigCommand("v2u_set_dmgmult_to_enemy", _configDamageMultiplierToEnemy);
-            registerSetConfigCommand("v2u_set_dmgmult_to_player", _configDamageMultiplierToPlayer);
-
-            registerSetConfigCommand("v2u_set_spdmult_player_walk", _configSpeedMultiplierPlayerWalk);
-            registerSetConfigCommand("v2u_set_spdmult_player_swim", _configSpeedMultiplierPlayerSwim);
-
-            registerSetConfigCommand("v2u_set_vstock_strength", _configVirtualStockStrength);
-            registerSetConfigCommand("v2u_set_vstock_shoulder_forward", _configVirtualStockShoulderForward);
-            registerSetConfigCommand("v2u_set_vstock_shoulder_right", _configVirtualStockShoulderRight);
-            registerSetConfigCommand("v2u_set_vstock_shoulder_up", _configVirtualStockShoulderUp);
-            registerSetConfigCommand("v2u_set_vstock_forward_depth", _configVirtualStockForwardDepth);
-            registerSetConfigCommand("v2u_set_vstock_shoulder_max_distance", _configVirtualStockShoulderMaxDistance);
-
-            return true;
         }
 
         //
@@ -695,7 +796,9 @@ namespace Vertigo2Unleashed
         // AWAKE
         // ------------------------------------------------------------------------------------------------------------
 
+#pragma warning disable IDE0051
         private void Awake()
+#pragma warning restore IDE0051
         {
             _logger.LogInfo($"Plugin {PluginInfo.PLUGIN_GUID} is loaded!");
 
