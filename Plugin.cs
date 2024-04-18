@@ -180,22 +180,18 @@ namespace Vertigo2Unleashed
         // UTILS
         // ------------------------------------------------------------------------------------------------------------
 
-        private static object GetAndInvokePrivateMethod(object instance, string name, object[] args = null)
+        private static object GetAndInvokePrivateMethod(object obj, string name, object[] args = null)
         {
-            var methodInfo =
-                instance.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
-
-            Debug.Assert(methodInfo != null);
-            return methodInfo.Invoke(instance, args ?? new object[] { });
+            var info = obj.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
+            Debug.Assert(info != null);
+            return info.Invoke(obj, args ?? new object[] { });
         }
 
-        private static object GetPrivatePropertyValue(object instance, string name)
+        private static object GetPrivatePropertyValue(object obj, string name)
         {
-            var propertyInfo =
-                instance.GetType().GetProperty(name, BindingFlags.NonPublic | BindingFlags.Instance);
-
-            Debug.Assert(propertyInfo != null);
-            return propertyInfo.GetValue(instance);
+            var info = obj.GetType().GetProperty(name, BindingFlags.NonPublic | BindingFlags.Instance);
+            Debug.Assert(info != null);
+            return info.GetValue(obj);
         }
 
         //
@@ -211,19 +207,19 @@ namespace Vertigo2Unleashed
         private static SteamVR_Input_Sources _weaponSwitcherInputSourceOverride;
         private static SteamVR_Input_Sources _weaponSwitcherInputSourceOtherHandOverride;
 
-        private static SteamVR_Input_Sources InputSourceDominant =>
+        private static SteamVR_Input_Sources VanillaInputSourceDominant =>
             VertigoPlayer.instance.GetHand(GameManager.Hand_Dominant).inputSource;
 
-        private static SteamVR_Input_Sources InputSourceNonDominant =>
+        private static SteamVR_Input_Sources VanillaInputSourceNonDominant =>
             VertigoPlayer.instance.GetHand(GameManager.Hand_NonDominant).inputSource;
 
         private static SteamVR_Input_Sources OverridenInputSourceDominant => _configDualWieldingEnabled.Value
             ? _weaponSwitcherInputSourceOverride
-            : InputSourceDominant;
+            : VanillaInputSourceDominant;
 
         private static SteamVR_Input_Sources OverridenInputSourceNonDominant => _configDualWieldingEnabled.Value
             ? _weaponSwitcherInputSourceOtherHandOverride
-            : InputSourceNonDominant;
+            : VanillaInputSourceNonDominant;
 
         [HarmonyPatch(typeof(WeaponSwitcher), "inputSource", MethodType.Getter)]
         [HarmonyPrefix]
@@ -245,14 +241,14 @@ namespace Vertigo2Unleashed
 
         private static void SetInputSourceOverridesToDominant()
         {
-            _weaponSwitcherInputSourceOverride = InputSourceDominant;
-            _weaponSwitcherInputSourceOtherHandOverride = InputSourceNonDominant;
+            _weaponSwitcherInputSourceOverride = VanillaInputSourceDominant;
+            _weaponSwitcherInputSourceOtherHandOverride = VanillaInputSourceNonDominant;
         }
 
         private static void SetInputSourceOverridesToNonDominant()
         {
-            _weaponSwitcherInputSourceOverride = InputSourceNonDominant;
-            _weaponSwitcherInputSourceOtherHandOverride = InputSourceDominant;
+            _weaponSwitcherInputSourceOverride = VanillaInputSourceNonDominant;
+            _weaponSwitcherInputSourceOtherHandOverride = VanillaInputSourceDominant;
         }
 
         [HarmonyPatch(typeof(WeaponSwitcher), "Update")]
@@ -262,15 +258,16 @@ namespace Vertigo2Unleashed
         {
             if (!_configDualWieldingEnabled.Value)
             {
+                SetInputSourceOverridesToDominant();
                 return true;
             }
 
-            if (__instance.a_weaponSwitch.GetState(InputSourceDominant))
+            if (__instance.a_weaponSwitch.GetState(VanillaInputSourceDominant))
             {
                 SetInputSourceOverridesToDominant();
             }
 
-            if (__instance.a_weaponSwitch.GetState(InputSourceNonDominant))
+            if (__instance.a_weaponSwitch.GetState(VanillaInputSourceNonDominant))
             {
                 SetInputSourceOverridesToNonDominant();
             }
@@ -291,8 +288,6 @@ namespace Vertigo2Unleashed
             __instance.ResetIcons();
             GetAndInvokePrivateMethod(__instance, "CheckSecretWeapons");
 
-            var inputSource = OverridenInputSourceDominant;
-
             if (__instance.ActiveSlot != -1)
             {
                 var equipInputSource =
@@ -306,7 +301,7 @@ namespace Vertigo2Unleashed
                 });
 
                 __instance.StartCoroutine(task);
-                __instance.manager.SwitchToEquippable(null, inputSource, false);
+                __instance.manager.SwitchToEquippable(null, OverridenInputSourceDominant, false);
 
                 // Removed from original code:
                 // __instance.manager.SwitchToEquippable(null, inputSourceOtherHand, true);
@@ -419,7 +414,7 @@ namespace Vertigo2Unleashed
             ref EquippablesManager.EquippableInstance __result)
         {
             if (!_configDualWieldingAllowClonedWeapons.Value ||
-                _weaponSwitcherInputSourceOverride != InputSourceNonDominant)
+                _weaponSwitcherInputSourceOverride != VanillaInputSourceNonDominant)
             {
                 return true;
             }
