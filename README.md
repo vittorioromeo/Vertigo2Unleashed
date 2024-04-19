@@ -4,6 +4,17 @@
 
 ## New Features
 
+* **Dual Wielding**
+    - ➡️ | Allows each hand to independently equip and operate a weapon.
+    - ⚠️ | Requires the following actions to be bound on *both* controllers in the SteamVR bindings menu:
+        - `"Weapon Switch"`, `"Reload"`.
+    - ⚠️ | It is recommended to rebind `"Toggle Menu"` to be a long press or chord to not interfere with left hand `"Reload"`.
+    - ⚠️ | It is also recommended to rebind `"Teleport"` from the left joystick, as that is the most natural bind for weapon selection.
+    - 🛈 | Obtaining a weapon makes it usable by both hands. E.g., as soon as you collect the Trident SMG, you'll be able to dual wield two Trident SMGs.
+        - If you prefer to not have duplicate weapons, you can set `DualWieldingAllowClonedWeapons` to `false` in `Vertigo2Unleashed.cfg`.
+
+<p></p>
+
 * **Virtual Stock**
     - ➡️ | Interpolates two-handed aiming with the player's approximate shoulder position, giving more stability when aiming down sights.
     - 🛠️ | Strength, shoulder position, and max distance can be tweaked in `Vertigo2Unleashed.cfg` or the non-VR in-game console (F1).
@@ -13,6 +24,7 @@
 * **Grip-Holster Mode**
     - ➡️ | Automatically holsters weapons when the grip is released, and equips the last holstered weapon when the grip is held.
     - 🛈 | Any hand interaction (e.g. grabbing a prop, using the wrist storage) takes priority over equipping the last holstered weapon.
+    - 🛈 | This is the recommended setting when dual wielding, as it simplifies the reloading process for two weapons a lot.
     - 🛈 | Helps to quickly interact with the world (e.g. collect an item, climb a ladder) without having to open the weapon selection menu.
     - 🛠️ | Can be toggled  in `Vertigo2Unleashed.cfg`.
 
@@ -49,9 +61,19 @@
 
 4. Run Vertigo 2 as usual from Steam.
 
+<p></p>
+
+5. ❗ **Make sure to change your SteamVR bindings to support the new features**, and to tweak any settings. ❗
+    - You can find a *"Vertigo 2 - Unleashed | Oculus Touch"* binding shared with the SteamVR community.
+    - Alternatively, the `steam.app.843390_oculus_touch.json` file in this repository can be imported.
+
 ## Removal
 
 1. Simply delete `Vertigo2Unleashed.dll`.
+
+## Known Issues
+
+- The Trident SMG fire mode switch is shared with the SMG duplicate weapon when dual-wielding. This needs to be fixed by Zulubo :)
 
 ## Support The Project
 
