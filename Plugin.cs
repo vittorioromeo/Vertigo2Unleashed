@@ -251,30 +251,6 @@ namespace Vertigo2Unleashed
             _weaponSwitcherInputSourceOtherHandOverride = VanillaInputSourceDominant;
         }
 
-        [HarmonyPatch(typeof(WeaponSwitcher), "Update")]
-        [HarmonyPrefix]
-        [SuppressMessage("ReSharper", "InconsistentNaming")]
-        private static bool DualWieldingWeaponSwitchPatchPrefix(WeaponSwitcher __instance)
-        {
-            if (!_configDualWieldingEnabled.Value)
-            {
-                SetInputSourceOverridesToDominant();
-                return true;
-            }
-
-            if (__instance.a_weaponSwitch.GetState(VanillaInputSourceDominant))
-            {
-                SetInputSourceOverridesToDominant();
-            }
-
-            if (__instance.a_weaponSwitch.GetState(VanillaInputSourceNonDominant))
-            {
-                SetInputSourceOverridesToNonDominant();
-            }
-
-            return true;
-        }
-
         // Now I had to patch out the annoying behavior that holsters BOTH hands if the "hands" icon is selected in ANY
         // weapon selection wheel. The code below is mostly copy-pasted from the disassembly, and I just commented the
         // few annoying lines.
@@ -465,16 +441,32 @@ namespace Vertigo2Unleashed
         [SuppressMessage("ReSharper", "InconsistentNaming")]
         private static bool GripHolsterPatchPrefix(WeaponSwitcher __instance, bool ___openAllowed)
         {
-            if (!_configGripHolsterModeEnabled.Value || __instance.menuOpen || !___openAllowed)
+            if (_configGripHolsterModeEnabled.Value && !__instance.menuOpen && ___openAllowed)
             {
-                return true;
+                SetInputSourceOverridesToDominant();
+                doHand(GameManager.Hand_Dominant, ref _oldEquippableDominant);
+
+                SetInputSourceOverridesToNonDominant();
+                doHand(GameManager.Hand_NonDominant, ref _oldEquippableNonDominant);
             }
 
-            SetInputSourceOverridesToDominant();
-            doHand(GameManager.Hand_Dominant, ref _oldEquippableDominant);
+            if (_configDualWieldingEnabled.Value)
+            {
+                Debug.Assert(VanillaInputSourceDominant != VanillaInputSourceNonDominant);
 
-            SetInputSourceOverridesToNonDominant();
-            doHand(GameManager.Hand_NonDominant, ref _oldEquippableNonDominant);
+                if (__instance.a_weaponSwitch.GetState(VanillaInputSourceDominant))
+                {
+                    SetInputSourceOverridesToDominant();
+                }
+                else if (__instance.a_weaponSwitch.GetState(VanillaInputSourceNonDominant))
+                {
+                    SetInputSourceOverridesToNonDominant();
+                }
+            }
+            else
+            {
+                SetInputSourceOverridesToDominant();
+            }
 
             return true;
 
