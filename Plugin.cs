@@ -13,6 +13,7 @@ using UnityEngine;
 using Debug = System.Diagnostics.Debug;
 using System;
 using System.Collections;
+using Vertigo2.Interaction;
 
 namespace Vertigo2Unleashed
 {
@@ -34,13 +35,20 @@ namespace Vertigo2Unleashed
         // CONFIG ENTRIES
         // ------------------------------------------------------------------------------------------------------------
 
+        //
+        // Grip-holster mode
         private static ConfigEntry<bool> _configGripHolsterModeEnabled;
+        private static ConfigEntry<bool> _configGripHolsterModeNoTrigger;
 
+        //
+        // Difficulty multipliers
         private static ConfigEntry<float> _configDamageMultiplierToEnemy;
         private static ConfigEntry<float> _configDamageMultiplierToPlayer;
         private static ConfigEntry<float> _configSpeedMultiplierPlayerWalk;
         private static ConfigEntry<float> _configSpeedMultiplierPlayerSwim;
 
+        //
+        // Virtual stock
         private static ConfigEntry<bool> _configVirtualStockEnabled;
         private static ConfigEntry<float> _configVirtualStockStrength;
         private static ConfigEntry<float> _configVirtualStockShoulderForward;
@@ -49,10 +57,25 @@ namespace Vertigo2Unleashed
         private static ConfigEntry<float> _configVirtualStockForwardDepth;
         private static ConfigEntry<float> _configVirtualStockShoulderMaxDistance;
 
+        //
+        // Miscellaneous
         private static ConfigEntry<bool> _configRevolver2HGripEnabled;
 
+        //
+        // Dual wielding
         private static ConfigEntry<bool> _configDualWieldingEnabled;
         private static ConfigEntry<bool> _configDualWieldingAllowClonedWeapons;
+
+        //
+        // Melee attacks
+        private static ConfigEntry<bool> _configMeleeEnabled;
+        private static ConfigEntry<float> _configMeleeHandSphereCastRadius;
+        private static ConfigEntry<float> _configMeleeMaxDistance;
+        private static ConfigEntry<float> _configMeleeMinSpeed;
+        private static ConfigEntry<float> _configMeleeMaxSpeed;
+        private static ConfigEntry<float> _configMeleeMinDamage;
+        private static ConfigEntry<float> _configMeleeMaxDamage;
+        private static ConfigEntry<float> _configMeleeHitForceMultiplier;
 
         //
         //
@@ -70,6 +93,12 @@ namespace Vertigo2Unleashed
                 true,
                 "Enable grip-holster mode (automatically holsters weapons when the grip is released," +
                 " and equips the last holstered weapon when the grip is held)");
+
+            _configGripHolsterModeNoTrigger = Config.Bind("General",
+                "GripHolsterModeNoTrigger",
+                true,
+                "Prevents grip-holster mode from activating if the trigger button is held before the grip" +
+                " button (useful to allow to curl hands into fists for hand-to-hand melee combat)");
 
             _configDamageMultiplierToEnemy = Config.Bind("General",
                 "DamageMultiplierToEnemy",
@@ -129,7 +158,7 @@ namespace Vertigo2Unleashed
 
             _configVirtualStockShoulderMaxDistance = Config.Bind("General",
                 "VirtualStockShoulderMaxDistance",
-                0.4f,
+                0.45f,
                 "Maximum distance between the dominant hand and shoulder to enable virtual stock aiming " +
                 "(reverts to vanilla 2H aiming if exceeded)");
 
@@ -141,12 +170,52 @@ namespace Vertigo2Unleashed
             _configDualWieldingEnabled = Config.Bind("General",
                 "DualWieldingEnabled",
                 true,
-                "Enable dual wielding (requires 'weapon switch' action bound to both hands in SteamVR)");
+                "Enable dual wielding (needs 'weapon switch' bound to both hands in SteamVR)");
 
             _configDualWieldingAllowClonedWeapons = Config.Bind("General",
                 "DualWieldingAllowClonedWeapons",
                 true,
                 "Allows dual wielding two clones of the same weapon");
+
+            _configMeleeEnabled = Config.Bind("General",
+                "MeleeEnabled",
+                true,
+                "Enable universal melee attacks (hand-to-hand, held weapons)");
+
+            _configMeleeHandSphereCastRadius = Config.Bind("General",
+                "MeleeHandSphereCastRadius",
+                0.15f,
+                "Radius around player hand considered for hand-to-hand melee attacks");
+
+            _configMeleeMaxDistance = Config.Bind("General",
+                "MeleeMaxDistance",
+                0.08f,
+                "Maximum distance from the contact point for melee targets to register");
+
+            _configMeleeMinSpeed = Config.Bind("General",
+                "MeleeMinSpeed",
+                2.0f,
+                "Minimum speed required for a melee attack to register, also used for damage calculations");
+
+            _configMeleeMaxSpeed = Config.Bind("General",
+                "MeleeMaxSpeed",
+                11.0f,
+                "Speed upper bound used for melee damage calculations");
+
+            _configMeleeMinDamage = Config.Bind("General",
+                "MeleeMinDamage",
+                2.5f,
+                "Minimum damage dealt for a successful melee attack");
+
+            _configMeleeMaxDamage = Config.Bind("General",
+                "MeleeMaxDamage",
+                22.5f,
+                "Maximum damage dealt for a successful melee attack");
+
+            _configMeleeHitForceMultiplier = Config.Bind("General",
+                "MeleeHitForceMultiplier",
+                1.5f,
+                "Physics force multiplier for melee attacks (e.g. affects ragdolls from melee kills)");
 
             HarmonyFileLog.Enabled = true;
         }
@@ -158,6 +227,7 @@ namespace Vertigo2Unleashed
         // ------------------------------------------------------------------------------------------------------------
 
 #pragma warning disable IDE0051
+        // ReSharper disable once UnusedMember.Local
         private void Awake()
 #pragma warning restore IDE0051
         {
@@ -166,7 +236,7 @@ namespace Vertigo2Unleashed
             // --------------------------------------------------------------------------------------------------------
             // HARMONY PATCHES
             Harmony.CreateAndPatchAll(typeof(Plugin));
-            _logger.LogInfo($"Injected all Harmony patches");
+            _logger.LogInfo("Injected all Harmony patches");
 
             // --------------------------------------------------------------------------------------------------------
             // DAMAGE MULTIPLIERS
@@ -182,16 +252,60 @@ namespace Vertigo2Unleashed
 
         private static object GetAndInvokePrivateMethod(object obj, string name, object[] args = null)
         {
+            Debug.Assert(obj != null);
+
             var info = obj.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance);
             Debug.Assert(info != null);
+
             return info.Invoke(obj, args ?? new object[] { });
         }
 
         private static object GetPrivatePropertyValue(object obj, string name)
         {
+            Debug.Assert(obj != null);
+
             var info = obj.GetType().GetProperty(name, BindingFlags.NonPublic | BindingFlags.Instance);
             Debug.Assert(info != null);
+
             return info.GetValue(obj);
+        }
+
+        // ReSharper disable once UnusedMember.Local
+        private static void SetPrivateFieldValue(object obj, string name, object value)
+        {
+            Debug.Assert(obj != null);
+
+            var info = obj.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+            Debug.Assert(info != null);
+
+            info.SetValue(obj, value);
+        }
+
+        private static object GetPrivateFieldValue(object obj, string name)
+        {
+            Debug.Assert(obj != null);
+
+            var info = obj.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+            Debug.Assert(info != null);
+
+            return info.GetValue(obj);
+        }
+
+        private static void RaisePrivateEvent<TEventArgs>(object obj, string eventName, TEventArgs eventArgs)
+            where TEventArgs : EventArgs
+        {
+            Debug.Assert(obj != null);
+
+            var eventField = (MulticastDelegate)GetPrivateFieldValue(obj, eventName);
+            if (eventField == null)
+            {
+                return;
+            }
+
+            foreach (var handler in eventField.GetInvocationList())
+            {
+                handler.Method.Invoke(handler.Target, new[] { obj, eventArgs });
+            }
         }
 
         //
@@ -332,8 +446,87 @@ namespace Vertigo2Unleashed
             return false;
         }
 
-        // Would also be nice to patch `WeaponPickup.Pickup` to allow both hands to pick up weapons, but it's not that
-        // important.
+        [HarmonyPatch(typeof(WeaponPickup), "Pickup")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool WeaponPickupPickupPatchPrefix(WeaponPickup __instance)
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return true;
+            }
+
+            // Mostly copied from the original, with a few tweaks.
+
+            if (__instance.pickedUp || EquippablesManager.instance == null)
+            {
+                return false;
+            }
+
+            var interactable = (VertigoInteractable)GetPrivateFieldValue(__instance, "interactable");
+            if (interactable == null)
+            {
+                return true;
+            }
+
+            // Tweak: input source depends on the interactable hand.
+            var inputSource = interactable.mainHoldingHand.inputSource;
+
+            // Tweak: override input sources before doing stuff with equippables. Actually not sure if this is needed.
+            if (inputSource == GameManager.Hand_Dominant)
+            {
+                SetInputSourceOverridesToDominant();
+            }
+            else
+            {
+                SetInputSourceOverridesToNonDominant();
+            }
+
+            // Tweak: do not use `Disarm` here to set `autoSwitchOtherHand` to `false`.
+            EquippablesManager.instance.SwitchToEquippable(null, inputSource, false);
+
+            if (interactable.isBeingHeld)
+            {
+                interactable.ForceDrop();
+            }
+
+            if (__instance.unlockWeapon)
+            {
+                EquippablesManager.instance.PickupWeapon(__instance.weapon, inputSource);
+            }
+            else
+            {
+                EquippablesManager.instance.SwitchToEquippable(__instance.weapon, inputSource, false);
+            }
+
+            if (__instance.pickupSmoothTransform != null)
+            {
+                EquippablesManager.instance.PickupSmooth(inputSource, __instance.pickupSmoothTransform);
+            }
+
+            __instance.pickedUp = true;
+            RaisePrivateEvent(__instance, "OnPickup", EventArgs.Empty);
+
+            __instance.PickupUnityEvent.Invoke();
+
+            var eqip = EquippablesManager.instance.GetHand(inputSource).currentEquippable.eqip;
+
+            var weaponTutorialCoroutineResult =
+                (IEnumerator)GetAndInvokePrivateMethod(__instance, "DoWeaponTutorial", new object[] { eqip });
+
+            eqip.StartCoroutine(weaponTutorialCoroutineResult);
+
+            if (__instance.saveGameWhenPickedUp)
+            {
+                var saveCoroutineResult = (IEnumerator)GetAndInvokePrivateMethod(__instance, "SaveCoroutine");
+                __instance.StartCoroutine(saveCoroutineResult);
+            }
+
+            // Tweak: restore input sources before the end.
+            SetInputSourceOverridesToDominant();
+
+            return false;
+        }
 
         //
         //
@@ -436,6 +629,18 @@ namespace Vertigo2Unleashed
         private static EquippableProfile _oldEquippableDominant;
         private static EquippableProfile _oldEquippableNonDominant;
 
+        [HarmonyPatch(typeof(GameManager), "LoadLevel")]
+        [HarmonyPrefix]
+        public static bool GameManagerLoadLevelPatchPrefix()
+        {
+            _oldEquippableDominant = null;
+            _oldEquippableNonDominant = null;
+
+            SetInputSourceOverridesToDominant();
+
+            return true;
+        }
+
         [HarmonyPatch(typeof(WeaponSwitcher), "Update")]
         [HarmonyPrefix]
         [SuppressMessage("ReSharper", "InconsistentNaming")]
@@ -473,6 +678,7 @@ namespace Vertigo2Unleashed
             void doHand(SteamVR_Input_Sources handType, ref EquippableProfile oldEquippable)
             {
                 var hand = VertigoPlayer.instance.GetHand(handType);
+                var triggerActionState = SteamVR_Actions.default_Fire.GetState(hand.inputSource);
                 var grabGripActionState = hand.a_grab_grip.GetState(hand.inputSource);
                 var grabGripActionLastState = hand.a_grab_grip.GetLastState(hand.inputSource);
                 var handEquippable = __instance.manager.GetHand(handType);
@@ -484,7 +690,8 @@ namespace Vertigo2Unleashed
                     __instance.au.PlayOneShot(__instance.au_open);
                 }
 
-                if ((!grabGripActionLastState && grabGripActionState) // rising edge
+                if ((!_configGripHolsterModeNoTrigger.Value || !triggerActionState) // trigger not pressed (fist pose)
+                    && (!grabGripActionLastState && grabGripActionState) // rising edge
                     && oldEquippable != null
                     && handEquippable.currentProfile == null
                     && hand.hoveringInteractable == null
@@ -509,9 +716,8 @@ namespace Vertigo2Unleashed
                 return GameManager.Hand_Dominant;
             }
 
-            var equippablesManager = VertigoPlayer.instance.equippablesManager;
-            var dominantHand = equippablesManager.GetHand(GameManager.Hand_Dominant);
-            var nonDominantHand = equippablesManager.GetHand(GameManager.Hand_NonDominant);
+            var dominantHand = EquippablesManager.instance.GetHand(GameManager.Hand_Dominant);
+            var nonDominantHand = EquippablesManager.instance.GetHand(GameManager.Hand_NonDominant);
 
             // The only "interesting" case for dual wielding is when the only hand that's holding a weapon is the
             // non-dominant one.
@@ -535,7 +741,7 @@ namespace Vertigo2Unleashed
                 return true;
             }
 
-            var hip = (InputSourceForBelt() == GameManager.Hand_NonDominant) ? ___pos_rightHip : ___pos_leftHip;
+            var hip = InputSourceForBelt() == GameManager.Hand_NonDominant ? ___pos_rightHip : ___pos_leftHip;
             ___uiRoot.transform.position = hip.position;
             ___uiRoot.transform.rotation = hip.rotation;
 
@@ -553,9 +759,8 @@ namespace Vertigo2Unleashed
                 return true;
             }
 
-            var equippablesManager = VertigoPlayer.instance.equippablesManager;
-            var dominantHand = equippablesManager.GetHand(GameManager.Hand_Dominant);
-            var nonDominantHand = equippablesManager.GetHand(GameManager.Hand_NonDominant);
+            var dominantHand = EquippablesManager.instance.GetHand(GameManager.Hand_Dominant);
+            var nonDominantHand = EquippablesManager.instance.GetHand(GameManager.Hand_NonDominant);
 
             if (dominantHand.currentProfile != null && nonDominantHand.currentProfile != null)
             {
@@ -565,7 +770,7 @@ namespace Vertigo2Unleashed
                 return false;
             }
 
-            equippable = equippablesManager.GetHand(InputSourceForBelt()).currentProfile;
+            equippable = EquippablesManager.instance.GetHand(InputSourceForBelt()).currentProfile;
             return true;
         }
 
@@ -776,6 +981,14 @@ namespace Vertigo2Unleashed
             registerSetConfigCommand("v2u_set_vstock_forward_depth", _configVirtualStockForwardDepth);
             registerSetConfigCommand("v2u_set_vstock_shoulder_max_distance", _configVirtualStockShoulderMaxDistance);
 
+            registerSetConfigCommand("v2u_set_Melee_spherecast_radius", _configMeleeHandSphereCastRadius);
+            registerSetConfigCommand("v2u_set_Melee_max_distance", _configMeleeMaxDistance);
+            registerSetConfigCommand("v2u_set_Melee_min_speed", _configMeleeMinSpeed);
+            registerSetConfigCommand("v2u_set_Melee_max_speed", _configMeleeMaxSpeed);
+            registerSetConfigCommand("v2u_set_Melee_min_damage", _configMeleeMinDamage);
+            registerSetConfigCommand("v2u_set_Melee_max_damage", _configMeleeMaxDamage);
+            registerSetConfigCommand("v2u_set_Melee_hit_force_multiplier", _configMeleeHitForceMultiplier);
+
             return true;
 
             void registerCommand(string command, CommandHandler handler)
@@ -789,10 +1002,200 @@ namespace Vertigo2Unleashed
                 registerCommand(command, args =>
                 {
                     configEntry.Value = float.Parse(args[0]);
-                    __instance.Log("Set config value to " + args[0], false);
+                    __instance.Log("Set config value to " + args[0]);
                     _configFile.Save();
                 });
             }
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
+        // UNIVERSAL MELEE
+        // ------------------------------------------------------------------------------------------------------------
+
+        private static readonly float[] MeleeCooldownPerHand = { 0.0f, 0.0f };
+
+        private enum MeleeResult
+        {
+            Nothing,
+            HitSomething,
+            HitEnemy
+        }
+
+        private static MeleeResult DoMelee(VertigoHand hand, float hitDistance, Collider hitCollider, Vector3 hitPoint,
+            Vector3 hitNormal, Vector3 velocity, Vector3 hitDir)
+        {
+            if (hitDistance > _configMeleeMaxDistance.Value)
+            {
+                return MeleeResult.Nothing;
+            }
+
+            var vertigoHittable = VertigoHittable.GetByCollider(hitCollider);
+
+            if (vertigoHittable == null)
+            {
+                return MeleeResult.Nothing;
+            }
+
+            var vertigoEntity = vertigoHittable.GetLinkedEntity();
+
+            if (vertigoEntity == null ||
+                vertigoEntity is VertigoPlayer ||
+                vertigoEntity == hand.otherHand ||
+                hitCollider.GetComponentInParent<HeldEquippablePhysical>() != null ||
+                (hand.attachedInteractable != null &&
+                 vertigoEntity.gameObject == hand.attachedInteractable.gameObject) ||
+                (hand.otherHand.attachedInteractable != null &&
+                 vertigoEntity.gameObject == hand.otherHand.attachedInteractable.gameObject))
+            {
+                return MeleeResult.Nothing;
+            }
+
+            var damageScale = Mathf.Clamp01(Mathf.InverseLerp(_configMeleeMinSpeed.Value,
+                _configMeleeMaxSpeed.Value, velocity.magnitude));
+
+            var hitDamage =
+                Mathf.Lerp(_configMeleeMinDamage.Value, _configMeleeMaxDamage.Value, damageScale);
+
+            vertigoHittable.Hit(
+                new HitInfo(hitDamage, velocity.magnitude * _configMeleeHitForceMultiplier.Value,
+                    hitPoint, hitDir, hitNormal,
+                    VertigoPlayer.instance, DamageType.Impact));
+
+            if (hitCollider.gameObject.layer == 8 && vertigoEntity is Enemy enemy)
+            {
+                BulletHitAudioManager.HitSuccess(enemy.GetEnemyType(), hitPoint);
+                return MeleeResult.HitEnemy;
+            }
+
+            BulletHitAudioManager.HitSurface(hitCollider.sharedMaterial, hitPoint, 1.0f);
+            return MeleeResult.HitSomething;
+        }
+
+        // ReSharper disable once SuggestBaseTypeForParameter
+        private static int GetHandIndex(VertigoHand hand)
+        {
+            return hand == VertigoPlayer.instance.LHand ? 0 : 1;
+        }
+
+        // ReSharper disable once ClassNeverInstantiated.Local
+        private class MeleeCollisionComponent : MonoBehaviour
+        {
+            public HeldEquippablePhysical Parent;
+
+#pragma warning disable IDE0051
+            // ReSharper disable once UnusedMember.Local
+            private void OnCollisionEnter(Collision other)
+#pragma warning restore IDE0051
+            {
+                var hand = Parent.inputSource == VertigoPlayer.instance.RHand.inputSource
+                    ? VertigoPlayer.instance.RHand
+                    : VertigoPlayer.instance.LHand;
+
+                Debug.Assert(hand != null);
+
+                var gunVelocity = Parent.rigidbody.velocity;
+
+                ref var cooldown = ref MeleeCooldownPerHand[GetHandIndex(hand)];
+                if (cooldown > 0.0f || gunVelocity.magnitude < _configMeleeMinSpeed.Value)
+                {
+                    return;
+                }
+
+                Debug.Assert(other != null);
+                Debug.Assert(other.contactCount > 0);
+                Debug.Assert(other.collider != null);
+
+                var contact = other.contacts[0];
+
+                var meleeResult = DoMelee(hand, contact.separation, other.collider, contact.point, contact.normal,
+                    gunVelocity, gunVelocity.normalized);
+
+                if (meleeResult != MeleeResult.Nothing)
+                {
+                    cooldown = 0.2f;
+                }
+            }
+        }
+
+        [HarmonyPatch(typeof(HeldEquippablePhysical), "FixedUpdate")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool VertigoWeaponMeleePatchPrefix(HeldEquippablePhysical __instance)
+        {
+            if (!_configMeleeEnabled.Value)
+            {
+                return true;
+            }
+
+            if (__instance.gameObject.GetComponent<MeleeCollisionComponent>() == null)
+            {
+                __instance.gameObject.AddComponent<MeleeCollisionComponent>().Parent = __instance;
+                __instance.rigidbody.detectCollisions = true;
+            }
+
+            return true;
+        }
+
+        [HarmonyPatch(typeof(VertigoCharacterController), "FixedUpdate")]
+        [HarmonyPrefix]
+        private static bool VertigoPlayerCharacterControllerMeleeCooldownPatchPrefix()
+        {
+            if (!_configMeleeEnabled.Value)
+            {
+                return true;
+            }
+
+            foreach (var handIndex in new[] { 0, 1 })
+            {
+                ref var cooldown = ref MeleeCooldownPerHand[handIndex];
+                cooldown -= Time.deltaTime;
+
+                if (cooldown <= 0.0f)
+                {
+                    cooldown = 0.0f;
+                }
+            }
+
+            return true;
+        }
+
+        [HarmonyPatch(typeof(VertigoHand), "FixedUpdate")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool VertigoHandMeleePatchPrefix(VertigoHand __instance)
+        {
+            if (!_configMeleeEnabled.Value)
+            {
+                return true;
+            }
+
+            ref var cooldown = ref MeleeCooldownPerHand[GetHandIndex(__instance)];
+            if (cooldown > 0.0f || __instance.velocity.magnitude < _configMeleeMinSpeed.Value)
+            {
+                return true;
+            }
+
+            var results = Physics.SphereCastAll(
+                __instance.transform.position,
+                _configMeleeHandSphereCastRadius.Value,
+                __instance.transform.forward,
+                _configMeleeMaxDistance.Value,
+                Physics.AllLayers);
+
+            foreach (var hit in results)
+            {
+                var meleeResult = DoMelee(__instance, hit.distance, hit.collider, hit.point, hit.normal,
+                    __instance.velocity, -__instance.velocity.normalized);
+
+                if (meleeResult != MeleeResult.Nothing)
+                {
+                    cooldown = 0.2f;
+                }
+            }
+
+            return true;
         }
     }
 }
