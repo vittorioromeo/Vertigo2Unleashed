@@ -2,7 +2,18 @@
 
 > **Mod for the excellent [Vertigo 2](https://store.steampowered.com/app/843390/Vertigo_2/), providing more freedom to the player.**
 
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=AqFB48q26Yk"><img src="https://img.youtube.com/vi/AqFB48q26Yk/0.jpg" alt="Vertigo 2 - Unleashed | Release Trailer"></a>
+  <p><a href="https://www.youtube.com/watch?v=AqFB48q26Yk">Vertigo 2 - Unleashed | Release Trailer</a></p>
+</div>
+
 ## New Features
+
+* **Universal Melee**
+    - ➡️ | Allows physical melee attacks with any weapon, or even with empty hands.
+    - 🛠️ | Can be toggled and tweaked in `Vertigo2Unleashed.cfg`.
+
+<p></p>
 
 * **Dual Wielding**
     - ➡️ | Allows each hand to independently equip and operate a weapon.
