@@ -54,7 +54,7 @@
  
 ## Installation
 
-1. Obtain and install [BepInEx 5](https://github.com/BepInEx/BepInEx/releases).
+1. Obtain and install [BepInEx 5 (x64)](https://github.com/BepInEx/BepInEx/releases).
     - Basically, just extract the `.zip` in your Vertigo 2 folder (usually `C:\Program Files (x86)\Steam\steamapps\common\Vertigo 2\`).
     - Your Vertigo 2 folder should now contain a `BepInEx` subfolder and a `winhttp.dll`, among many other files.
 
