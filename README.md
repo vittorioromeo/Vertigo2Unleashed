@@ -2,7 +2,18 @@
 
 > **Mod for the excellent [Vertigo 2](https://store.steampowered.com/app/843390/Vertigo_2/), providing more freedom to the player.**
 
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=AqFB48q26Yk"><img src="https://img.youtube.com/vi/AqFB48q26Yk/0.jpg" alt="Vertigo 2 - Unleashed | Release Trailer"></a>
+  <p><a href="https://www.youtube.com/watch?v=AqFB48q26Yk">Vertigo 2 - Unleashed | Release Trailer</a></p>
+</div>
+
 ## New Features
+
+* **Universal Melee**
+    - ➡️ | Allows physical melee attacks with any weapon, or even with empty hands.
+    - 🛠️ | Can be toggled and tweaked in `Vertigo2Unleashed.cfg`.
+
+<p></p>
 
 * **Dual Wielding**
     - ➡️ | Allows each hand to independently equip and operate a weapon.
@@ -43,7 +54,7 @@
  
 ## Installation
 
-1. Obtain and install [BepInEx 5](https://github.com/BepInEx/BepInEx/releases).
+1. Obtain and install [BepInEx 5 (x64)](https://github.com/BepInEx/BepInEx/releases).
     - Basically, just extract the `.zip` in your Vertigo 2 folder (usually `C:\Program Files (x86)\Steam\steamapps\common\Vertigo 2\`).
     - Your Vertigo 2 folder should now contain a `BepInEx` subfolder and a `winhttp.dll`, among many other files.
 
