@@ -653,6 +653,8 @@ namespace Vertigo2Unleashed
 
                 SetInputSourceOverridesToNonDominant();
                 doHand(GameManager.Hand_NonDominant, ref _oldEquippableNonDominant);
+
+                // TODO: maybe reset to dominant here to avoid the bug?
             }
 
             if (_configDualWieldingEnabled.Value)
@@ -960,6 +962,68 @@ namespace Vertigo2Unleashed
         //
         //
         // ------------------------------------------------------------------------------------------------------------
+        // TRIDENT DUAL WIELDING PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        private static readonly TridentRifle.RifleModes[] TridentModePerHand =
+        {
+            TridentRifle.RifleModes.Fast,
+            TridentRifle.RifleModes.Fast
+        };
+
+        [HarmonyPatch(typeof(TridentRifle), "OnEnable")]
+        [HarmonyPostfix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static void TridentOnEnableDualWieldingPatchPostfix(TridentRifle __instance)
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return;
+            }
+
+            var handIndex = GetHandIndex(__instance.inputSource);
+            var isModeFast = TridentModePerHand[handIndex] == TridentRifle.RifleModes.Fast;
+
+            __instance.slide.restPos = isModeFast ? 1f : 0f;
+            __instance.slide.position = isModeFast ? 1f : 0f;
+        }
+
+        [HarmonyPatch(typeof(TridentRifle), "GunUpdate")]
+        [HarmonyPostfix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static void TridentGunUpdateDualWieldingPatchPostfix(TridentRifle __instance)
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return;
+            }
+
+            var handIndex = GetHandIndex(__instance.inputSource);
+
+            TridentModePerHand[handIndex] = __instance.slide.position > 0.5f
+                ? TridentRifle.RifleModes.Fast
+                : TridentRifle.RifleModes.Slow;
+
+            __instance.slide.restPos = TridentModePerHand[handIndex] == TridentRifle.RifleModes.Fast ? 1f : 0f;
+        }
+
+        [HarmonyPatch(typeof(TridentRifle), "Firing")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool TridentGunUpdateFiringPatchPrefix(TridentRifle __instance)
+        {
+            if (!_configDualWieldingEnabled.Value)
+            {
+                return true;
+            }
+
+            TridentRifle.mode = TridentModePerHand[GetHandIndex(__instance.inputSource)];
+            return true;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
         // CONSOLE PATCHES
         // ------------------------------------------------------------------------------------------------------------
 
@@ -1073,10 +1137,23 @@ namespace Vertigo2Unleashed
             return MeleeResult.HitSomething;
         }
 
+        private static VertigoHand GetHandFromInputSource(SteamVR_Input_Sources inputSource)
+        {
+            return inputSource == VertigoPlayer.instance.RHand.inputSource
+                ? VertigoPlayer.instance.RHand
+                : VertigoPlayer.instance.LHand;
+        }
+
         // ReSharper disable once SuggestBaseTypeForParameter
         private static int GetHandIndex(VertigoHand hand)
         {
             return hand == VertigoPlayer.instance.LHand ? 0 : 1;
+        }
+
+        // ReSharper disable once SuggestBaseTypeForParameter
+        private static int GetHandIndex(SteamVR_Input_Sources hand)
+        {
+            return GetHandIndex(GetHandFromInputSource(hand));
         }
 
         // ReSharper disable once ClassNeverInstantiated.Local
@@ -1089,10 +1166,7 @@ namespace Vertigo2Unleashed
             private void OnCollisionEnter(Collision other)
 #pragma warning restore IDE0051
             {
-                var hand = Parent.inputSource == VertigoPlayer.instance.RHand.inputSource
-                    ? VertigoPlayer.instance.RHand
-                    : VertigoPlayer.instance.LHand;
-
+                var hand = GetHandFromInputSource(Parent.inputSource);
                 Debug.Assert(hand != null);
 
                 var gunVelocity = Parent.rigidbody.velocity;
