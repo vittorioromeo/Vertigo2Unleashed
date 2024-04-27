@@ -46,6 +46,7 @@ namespace Vertigo2Unleashed
         private static ConfigEntry<float> _configDamageMultiplierToPlayer;
         private static ConfigEntry<float> _configSpeedMultiplierPlayerWalk;
         private static ConfigEntry<float> _configSpeedMultiplierPlayerSwim;
+        private static ConfigEntry<float> _configPlayerRecoilMultiplier;
 
         //
         // Virtual stock
@@ -120,6 +121,11 @@ namespace Vertigo2Unleashed
                 1.0f,
                 "Multiplier for player swim speed (m/s, smooth locomotion)");
 
+            _configPlayerRecoilMultiplier = Config.Bind("General",
+                "PlayerRecoilMultiplier",
+                1.0f,
+                "Multiplier for player weapon recoil");
+
             _configVirtualStockEnabled = Config.Bind("General",
                 "VirtualStockEnabled",
                 true,
@@ -142,8 +148,7 @@ namespace Vertigo2Unleashed
             _configVirtualStockShoulderRight = Config.Bind("General",
                 "VirtualStockShoulderRight",
                 0.25f,
-                "From the player's head position, sets how many units rightwards the shoulder is" +
-                " (for left-handed players, this value should probably be negative)");
+                "From the player's head position, sets how many units rightwards the right shoulder is");
 
             _configVirtualStockShoulderUp = Config.Bind("General",
                 "VirtualStockShoulderUp",
@@ -311,12 +316,41 @@ namespace Vertigo2Unleashed
         //
         //
         // ------------------------------------------------------------------------------------------------------------
+        // RECOIL PATCHES
+        // ------------------------------------------------------------------------------------------------------------
+
+        [HarmonyPatch(typeof(HeldEquippablePhysical), "Recoil")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool HeldEquippableRecoilPatchPrefix(HeldEquippablePhysical __instance, float recoilMul)
+        {
+            var d = (__instance.attachedGrip == null) ? 1f : __instance.attachedGrip.stabilizationMul;
+
+            var normalized = Vector3.Lerp(-__instance.recoilOrigin.forward, UnityEngine.Random.insideUnitSphere,
+                __instance.randomizeRecoil).normalized;
+
+            var recoilMagic = (float)GetPrivateFieldValue(__instance, "recoilMagic");
+
+            var recoilVec = normalized * __instance.recoilEnergy * recoilMagic * recoilMul *
+                __instance.manager.recoilMultiplier / d;
+
+            var task = (IEnumerator)GetAndInvokePrivateMethod(__instance, "SpreadRecoil",
+                new object[] { recoilVec * _configPlayerRecoilMultiplier.Value, 3 });
+
+            __instance.StartCoroutine(task);
+
+            return false;
+        }
+
+        //
+        //
+        // ------------------------------------------------------------------------------------------------------------
         // DUAL WIELDING PATCHES
         // ------------------------------------------------------------------------------------------------------------
 
         // Basically, I dynamically the weapon selection wheel "input source" depending on what hand was used to open
         // the weapon selection wheel UI. By overriding `inputSource` and `inputSourceOtherHand` I am able to have a
-        // per-hand fully functional weapon wheel. 
+        // per-hand fully functional weapon wheel.
 
         private static SteamVR_Input_Sources _weaponSwitcherInputSourceOverride;
         private static SteamVR_Input_Sources _weaponSwitcherInputSourceOtherHandOverride;
@@ -378,7 +412,7 @@ namespace Vertigo2Unleashed
             __instance.ResetIcons();
             GetAndInvokePrivateMethod(__instance, "CheckSecretWeapons");
 
-            if (__instance.ActiveSlot != -1)
+            if (__instance.ActiveSlot != -1) // TODO: this is probably why unequipping fails
             {
                 var equipInputSource =
                     ((EquippablesManager.EquippableInstance)GetPrivatePropertyValue(__instance, "activeEquippable"))
@@ -392,6 +426,11 @@ namespace Vertigo2Unleashed
 
                 __instance.StartCoroutine(task);
                 __instance.manager.SwitchToEquippable(null, OverridenInputSourceDominant, false);
+
+                // Reset grip-holster mode history if hands are explicitly selected:
+                (_lastOpenedWeaponSwitchMenu == LastOpenedWeaponSwitchMenu.Dominant
+                    ? ref _oldEquippableDominant
+                    : ref _oldEquippableNonDominant) = null;
 
                 // Removed from original code:
                 // __instance.manager.SwitchToEquippable(null, inputSourceOtherHand, true);
@@ -421,6 +460,11 @@ namespace Vertigo2Unleashed
             {
                 __instance.manager.SwitchToEquippable(null, inputSource, false);
 
+                // Reset grip-holster mode history if hands are explicitly selected:
+                (_lastOpenedWeaponSwitchMenu == LastOpenedWeaponSwitchMenu.Dominant
+                    ? ref _oldEquippableDominant
+                    : ref _oldEquippableNonDominant) = null;
+
                 // Removed from original code:
                 // __instance.manager.SwitchToEquippable(null, __instance.inputSourceOtherHand, true);
 
@@ -444,6 +488,48 @@ namespace Vertigo2Unleashed
 
             __instance.action_haptic.Execute(0f, 0.3f, 10f, 0.8f, inputSource);
             return false;
+        }
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "IconToHand")]
+        [HarmonyPrefix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static bool WeaponSwitcherIconToHandPatchPrefix(int ID)
+        {
+            if (!_configDualWieldingEnabled.Value || ID == -1)
+            {
+                return true;
+            }
+
+            // Setting `paused` to true suppresses the weapon switch action performed at the end of the coroutine.
+            // We are going to do it manually in the postfix.
+            GameManager.paused = true;
+
+            return true;
+        }
+
+        [HarmonyPatch(typeof(WeaponSwitcher), "IconToHand")]
+        [HarmonyPostfix]
+        [SuppressMessage("ReSharper", "InconsistentNaming")]
+        private static void WeaponSwitcherIconToHandPatchPostfix(WeaponSwitcher __instance, int ID,
+            SteamVR_Input_Sources hand)
+        {
+            if (!_configDualWieldingEnabled.Value || ID == -1)
+            {
+                return;
+            }
+
+            // The only difference here is setting `autoSwitchOtherHand` to `false`.
+
+            __instance.manager.SwitchToEquippable(__instance.slots[ID].equippable, hand, false);
+            if (__instance.slots[ID].otherHandEquippable != null)
+            {
+                var forHand = hand == SteamVR_Input_Sources.RightHand
+                    ? SteamVR_Input_Sources.LeftHand
+                    : SteamVR_Input_Sources.RightHand;
+                __instance.manager.SwitchToEquippable(__instance.slots[ID].otherHandEquippable, forHand, false);
+            }
+
+            GameManager.paused = false;
         }
 
         [HarmonyPatch(typeof(WeaponPickup), "Pickup")]
@@ -583,13 +669,19 @@ namespace Vertigo2Unleashed
             ref EquippablesManager.EquippableInstance __result)
         {
             if (!_configDualWieldingAllowClonedWeapons.Value ||
-                _weaponSwitcherInputSourceOverride != VanillaInputSourceNonDominant)
+                _gripHolsterModeState == GripHolsterModeState.Dominant)
             {
                 return true;
             }
 
-            __result = Array.Find(_clonedEquippableInstances, e => e.profile == prof);
-            return false;
+            if (_gripHolsterModeState == GripHolsterModeState.NonDominant ||
+                _weaponSwitcherInputSourceOverride == VanillaInputSourceNonDominant) // TODO: use last opened menu?
+            {
+                __result = Array.Find(_clonedEquippableInstances, e => e.profile == prof);
+                return false;
+            }
+
+            return true;
         }
 
         private static bool _mustUpdateBelt; // When dual wielding, the belt must be updated whenever weapons change.
@@ -623,16 +715,33 @@ namespace Vertigo2Unleashed
         //
         //
         // ------------------------------------------------------------------------------------------------------------
-        // GRIP-HOLSTER MODE PATCHES
+        // GRIP-HOLSTER MODE & WEAPON SWITCH MENU PATCHES
         // ------------------------------------------------------------------------------------------------------------
 
+        enum GripHolsterModeState
+        {
+            Dominant,
+            NonDominant,
+            Done
+        }
+
+        private static GripHolsterModeState _gripHolsterModeState = GripHolsterModeState.Done;
         private static EquippableProfile _oldEquippableDominant;
         private static EquippableProfile _oldEquippableNonDominant;
+
+        enum LastOpenedWeaponSwitchMenu
+        {
+            Dominant,
+            NonDominant
+        }
+
+        private static LastOpenedWeaponSwitchMenu _lastOpenedWeaponSwitchMenu = LastOpenedWeaponSwitchMenu.Dominant;
 
         [HarmonyPatch(typeof(GameManager), "LoadLevel")]
         [HarmonyPrefix]
         public static bool GameManagerLoadLevelPatchPrefix()
         {
+            _gripHolsterModeState = GripHolsterModeState.Done;
             _oldEquippableDominant = null;
             _oldEquippableNonDominant = null;
 
@@ -648,13 +757,11 @@ namespace Vertigo2Unleashed
         {
             if (_configGripHolsterModeEnabled.Value && !__instance.menuOpen && ___openAllowed)
             {
-                SetInputSourceOverridesToDominant();
+                _gripHolsterModeState = GripHolsterModeState.Dominant;
                 doHand(GameManager.Hand_Dominant, ref _oldEquippableDominant);
-
-                SetInputSourceOverridesToNonDominant();
+                _gripHolsterModeState = GripHolsterModeState.NonDominant;
                 doHand(GameManager.Hand_NonDominant, ref _oldEquippableNonDominant);
-
-                // TODO: maybe reset to dominant here to avoid the bug?
+                _gripHolsterModeState = GripHolsterModeState.Done;
             }
 
             if (_configDualWieldingEnabled.Value)
@@ -664,10 +771,12 @@ namespace Vertigo2Unleashed
                 if (__instance.a_weaponSwitch.GetState(VanillaInputSourceDominant))
                 {
                     SetInputSourceOverridesToDominant();
+                    _lastOpenedWeaponSwitchMenu = LastOpenedWeaponSwitchMenu.Dominant;
                 }
                 else if (__instance.a_weaponSwitch.GetState(VanillaInputSourceNonDominant))
                 {
                     SetInputSourceOverridesToNonDominant();
+                    _lastOpenedWeaponSwitchMenu = LastOpenedWeaponSwitchMenu.NonDominant;
                 }
             }
             else
@@ -861,28 +970,54 @@ namespace Vertigo2Unleashed
                 // ----------------------------------------------------------------------------------------------------
                 // CUSTOM CODE START
 
-                var dirWithoutVirtualStock = (attachedGrip.handgrabbing.handAnimator.CenterPosition_UnAnimated -
-                                              __instance.transform.position).normalized;
+                var grabbingOffHandPos = attachedGrip.handgrabbing.handAnimator.CenterPosition_UnAnimated;
+                var grabbingMainHand = attachedGrip.handgrabbing.otherHand;
+                var grabbingMainHandPos = grabbingMainHand.transform.position;
+                var dirWithoutVirtualStock = (grabbingOffHandPos - __instance.transform.position).normalized;
 
                 var headTransform = VertigoPlayer.instance.head.transform;
 
-                var shoulderPos = headTransform.position +
-                                  headTransform.forward.normalized * _configVirtualStockShoulderForward.Value +
-                                  headTransform.right.normalized * _configVirtualStockShoulderRight.Value +
-                                  headTransform.up.normalized * _configVirtualStockShoulderUp.Value;
+                Vector3 dirWithVirtualStock = dirWithoutVirtualStock;
 
-                var shoulderInterpolationPos =
-                    shoulderPos + headTransform.forward.normalized * _configVirtualStockForwardDepth.Value;
-
-                var dirWithVirtualStock = (shoulderInterpolationPos - __instance.transform.position).normalized;
-
-                var dominantHand = VertigoPlayer.instance.GetHand(GameManager.Hand_Dominant);
-
-                if ((shoulderPos - dominantHand.transform.position).magnitude >
-                    _configVirtualStockShoulderMaxDistance.Value)
+                if (_configVirtualStockEnabled.Value && __instance.equippable is not QuadBow)
                 {
-                    // Disable virtual stock
-                    dirWithVirtualStock = dirWithoutVirtualStock;
+                    var interpolationForwardDepth =
+                        headTransform.forward.normalized * _configVirtualStockForwardDepth.Value;
+
+                    var rightShoulderOffset =
+                        headTransform.forward.normalized * _configVirtualStockShoulderForward.Value +
+                        headTransform.right.normalized * _configVirtualStockShoulderRight.Value +
+                        headTransform.up.normalized * _configVirtualStockShoulderUp.Value;
+
+                    var rightShoulderPos = headTransform.position + rightShoulderOffset;
+                    var rightShoulderInterpolationPos = rightShoulderPos + interpolationForwardDepth;
+
+                    var rightShoulderEligible = grabbingMainHand == VertigoPlayer.instance.RHand &&
+                                                (rightShoulderPos - grabbingMainHandPos).magnitude <=
+                                                _configVirtualStockShoulderMaxDistance.Value;
+
+                    var leftShoulderOffset =
+                        headTransform.forward.normalized * _configVirtualStockShoulderForward.Value +
+                        -headTransform.right.normalized * _configVirtualStockShoulderRight.Value +
+                        headTransform.up.normalized * _configVirtualStockShoulderUp.Value;
+
+                    var leftShoulderPos = headTransform.position + leftShoulderOffset;
+                    var leftShoulderInterpolationPos = leftShoulderPos + interpolationForwardDepth;
+
+                    var leftShoulderEligible = grabbingMainHand == VertigoPlayer.instance.LHand &&
+                                               (leftShoulderPos - grabbingMainHandPos).magnitude <=
+                                               _configVirtualStockShoulderMaxDistance.Value;
+
+                    if (rightShoulderEligible)
+                    {
+                        dirWithVirtualStock =
+                            (rightShoulderInterpolationPos - __instance.transform.position).normalized;
+                    }
+                    else if (leftShoulderEligible)
+                    {
+                        dirWithVirtualStock =
+                            (leftShoulderInterpolationPos - __instance.transform.position).normalized;
+                    }
                 }
 
                 var dirFinal = Vector3.Lerp(dirWithoutVirtualStock, dirWithVirtualStock,
