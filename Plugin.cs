@@ -14,6 +14,7 @@ using Debug = System.Diagnostics.Debug;
 using System;
 using System.Collections;
 using Vertigo2.Interaction;
+using Microsoft.SqlServer.Server;
 
 namespace Vertigo2Unleashed
 {
@@ -55,7 +56,11 @@ namespace Vertigo2Unleashed
         private static ConfigEntry<float> _configVirtualStockShoulderForward;
         private static ConfigEntry<float> _configVirtualStockShoulderRight;
         private static ConfigEntry<float> _configVirtualStockShoulderUp;
-        private static ConfigEntry<float> _configVirtualStockForwardDepth;
+        private static ConfigEntry<float> _configVirtualStockDepthForward;
+        private static ConfigEntry<float> _configVirtualStockDepthRight;
+        private static ConfigEntry<float> _configVirtualStockDepthUp;
+        private static ConfigEntry<float> _configVirtualStockDepthUpTridentSmg;
+        private static ConfigEntry<float> _configVirtualStockDepthUpAnnihilator;
         private static ConfigEntry<float> _configVirtualStockShoulderMaxDistance;
 
         //
@@ -142,28 +147,52 @@ namespace Vertigo2Unleashed
 
             _configVirtualStockShoulderForward = Config.Bind("General",
                 "VirtualStockShoulderForward",
-                -0.1f,
-                "From the player's head position, sets how many units forward the shoulder is");
+                0.0f,
+                "From the player's IK shoulder position, sets how many units forward the shoulder is");
 
             _configVirtualStockShoulderRight = Config.Bind("General",
                 "VirtualStockShoulderRight",
-                0.25f,
-                "From the player's head position, sets how many units rightwards the right shoulder is");
+                0.0f,
+                "From the player's IK shoulder position, sets how many units rightwards the right shoulder is");
 
             _configVirtualStockShoulderUp = Config.Bind("General",
                 "VirtualStockShoulderUp",
-                -0.1f,
-                "From the player's head position, sets how many units upwards the shoulder is");
+                0.0f,
+                "From the player's IK shoulder position, sets how many units upwards the shoulder is");
 
-            _configVirtualStockForwardDepth = Config.Bind("General",
-                "VirtualStockForwardDepth",
-                2.75f,
+            _configVirtualStockDepthForward = Config.Bind("General",
+                "VirtualStockDepthForward",
+                1.50f,
                 "Starting from the shoulder position, sets how many units forward the virtual stock " +
                 "interpolation point is");
 
+            _configVirtualStockDepthRight = Config.Bind("General",
+                "VirtualStockDepthRight",
+                0.35f,
+                "Starting from the shoulder position, sets how many units right the virtual stock " +
+                "interpolation point is");
+
+            _configVirtualStockDepthUp = Config.Bind("General",
+                "VirtualStockDepthUp",
+                0.0f,
+                "Starting from the shoulder position, sets how many units up the virtual stock " +
+                "interpolation point is");
+
+            _configVirtualStockDepthUpTridentSmg = Config.Bind("General",
+                "VirtualStockDepthUpTridentSmg",
+                -0.75f,
+                "Starting from the shoulder position, sets how many units up the virtual stock " +
+                "interpolation point is (only for Trident SMG)");
+
+            _configVirtualStockDepthUpAnnihilator = Config.Bind("General",
+                "VirtualStockDepthUpAnnihilator",
+                -0.65f,
+                "Starting from the shoulder position, sets how many units up the virtual stock " +
+                "interpolation point is (only for Annihilator)");
+
             _configVirtualStockShoulderMaxDistance = Config.Bind("General",
                 "VirtualStockShoulderMaxDistance",
-                0.45f,
+                0.4f,
                 "Maximum distance between the dominant hand and shoulder to enable virtual stock aiming " +
                 "(reverts to vanilla 2H aiming if exceeded)");
 
@@ -562,10 +591,12 @@ namespace Vertigo2Unleashed
             if (inputSource == GameManager.Hand_Dominant)
             {
                 SetInputSourceOverridesToDominant();
+                _lastOpenedWeaponSwitchMenu = LastOpenedWeaponSwitchMenu.Dominant;
             }
             else
             {
                 SetInputSourceOverridesToNonDominant();
+                _lastOpenedWeaponSwitchMenu = LastOpenedWeaponSwitchMenu.NonDominant;
             }
 
             // Tweak: do not use `Disarm` here to set `autoSwitchOtherHand` to `false`.
@@ -675,7 +706,7 @@ namespace Vertigo2Unleashed
             }
 
             if (_gripHolsterModeState == GripHolsterModeState.NonDominant ||
-                _weaponSwitcherInputSourceOverride == VanillaInputSourceNonDominant) // TODO: use last opened menu?
+                _lastOpenedWeaponSwitchMenu == LastOpenedWeaponSwitchMenu.NonDominant)
             {
                 __result = Array.Find(_clonedEquippableInstances, e => e.profile == prof);
                 return false;
@@ -718,7 +749,7 @@ namespace Vertigo2Unleashed
         // GRIP-HOLSTER MODE & WEAPON SWITCH MENU PATCHES
         // ------------------------------------------------------------------------------------------------------------
 
-        enum GripHolsterModeState
+        private enum GripHolsterModeState
         {
             Dominant,
             NonDominant,
@@ -729,7 +760,7 @@ namespace Vertigo2Unleashed
         private static EquippableProfile _oldEquippableDominant;
         private static EquippableProfile _oldEquippableNonDominant;
 
-        enum LastOpenedWeaponSwitchMenu
+        private enum LastOpenedWeaponSwitchMenu
         {
             Dominant,
             NonDominant
@@ -975,48 +1006,68 @@ namespace Vertigo2Unleashed
                 var grabbingMainHandPos = grabbingMainHand.transform.position;
                 var dirWithoutVirtualStock = (grabbingOffHandPos - __instance.transform.position).normalized;
 
-                var headTransform = VertigoPlayer.instance.head.transform;
-
-                Vector3 dirWithVirtualStock = dirWithoutVirtualStock;
+                var dirWithVirtualStock = dirWithoutVirtualStock;
 
                 if (_configVirtualStockEnabled.Value && __instance.equippable is not QuadBow)
                 {
-                    var interpolationForwardDepth =
-                        headTransform.forward.normalized * _configVirtualStockForwardDepth.Value;
+                    var tridentUpDepth = (__instance.equippable is TridentRifle)
+                        ? _configVirtualStockDepthUpTridentSmg.Value
+                        : 0.0f;
 
-                    var rightShoulderOffset =
-                        headTransform.forward.normalized * _configVirtualStockShoulderForward.Value +
-                        headTransform.right.normalized * _configVirtualStockShoulderRight.Value +
-                        headTransform.up.normalized * _configVirtualStockShoulderUp.Value;
+                    var annihilatorUpDepth = (__instance.equippable is Annihilator)
+                        ? _configVirtualStockDepthUpAnnihilator.Value
+                        : 0.0f;
 
-                    var rightShoulderPos = headTransform.position + rightShoulderOffset;
-                    var rightShoulderInterpolationPos = rightShoulderPos + interpolationForwardDepth;
+                    // ReSharper disable once SuggestBaseTypeForParameter
+                    Vector3 doShoulder(VertigoHand hand, Transform shoulder, float rightDepthNegator)
+                    {
+                        if (grabbingMainHand != hand)
+                        {
+                            return Vector3.zero;
+                        }
 
-                    var rightShoulderEligible = grabbingMainHand == VertigoPlayer.instance.RHand &&
-                                                (rightShoulderPos - grabbingMainHandPos).magnitude <=
-                                                _configVirtualStockShoulderMaxDistance.Value;
+                        var shoulderOffset =
+                            shoulder.forward.normalized * _configVirtualStockShoulderForward.Value +
+                            shoulder.right.normalized * _configVirtualStockShoulderRight.Value +
+                            shoulder.up.normalized * _configVirtualStockShoulderUp.Value;
 
-                    var leftShoulderOffset =
-                        headTransform.forward.normalized * _configVirtualStockShoulderForward.Value +
-                        -headTransform.right.normalized * _configVirtualStockShoulderRight.Value +
-                        headTransform.up.normalized * _configVirtualStockShoulderUp.Value;
+                        var shoulderPos = shoulder.position + shoulderOffset;
 
-                    var leftShoulderPos = headTransform.position + leftShoulderOffset;
-                    var leftShoulderInterpolationPos = leftShoulderPos + interpolationForwardDepth;
-
-                    var leftShoulderEligible = grabbingMainHand == VertigoPlayer.instance.LHand &&
-                                               (leftShoulderPos - grabbingMainHandPos).magnitude <=
+                        var shoulderEligible = (shoulderPos - grabbingMainHandPos).magnitude <=
                                                _configVirtualStockShoulderMaxDistance.Value;
 
-                    if (rightShoulderEligible)
-                    {
-                        dirWithVirtualStock =
-                            (rightShoulderInterpolationPos - __instance.transform.position).normalized;
+                        if (!shoulderEligible)
+                        {
+                            return Vector3.zero;
+                        }
+
+                        var shoulderInterpolationOffset =
+                            shoulder.forward.normalized * _configVirtualStockDepthForward.Value +
+                            (shoulder.right.normalized * rightDepthNegator) * _configVirtualStockDepthRight.Value +
+                            shoulder.up.normalized * _configVirtualStockDepthUp.Value +
+                            Vector3.up.normalized * tridentUpDepth +
+                            Vector3.up.normalized * annihilatorUpDepth;
+
+                        return shoulderPos + shoulderInterpolationOffset;
                     }
-                    else if (leftShoulderEligible)
+
+                    var rightShoulderResult =
+                        doShoulder(VertigoPlayer.instance.RHand,
+                            BAMM.instance.bodyAnimator.ik.references.rightShoulder,
+                            1.0f);
+
+                    var leftShoulderResult =
+                        doShoulder(VertigoPlayer.instance.LHand,
+                            BAMM.instance.bodyAnimator.ik.references.leftShoulder,
+                            -1.0f);
+
+                    if (rightShoulderResult != Vector3.zero)
                     {
-                        dirWithVirtualStock =
-                            (leftShoulderInterpolationPos - __instance.transform.position).normalized;
+                        dirWithVirtualStock = (rightShoulderResult - __instance.transform.position).normalized;
+                    }
+                    else if (leftShoulderResult != Vector3.zero)
+                    {
+                        dirWithVirtualStock = (leftShoulderResult - __instance.transform.position).normalized;
                     }
                 }
 
@@ -1177,7 +1228,9 @@ namespace Vertigo2Unleashed
             registerSetConfigCommand("v2u_set_vstock_shoulder_forward", _configVirtualStockShoulderForward);
             registerSetConfigCommand("v2u_set_vstock_shoulder_right", _configVirtualStockShoulderRight);
             registerSetConfigCommand("v2u_set_vstock_shoulder_up", _configVirtualStockShoulderUp);
-            registerSetConfigCommand("v2u_set_vstock_forward_depth", _configVirtualStockForwardDepth);
+            registerSetConfigCommand("v2u_set_vstock_depth_forward", _configVirtualStockDepthForward);
+            registerSetConfigCommand("v2u_set_vstock_depth_right", _configVirtualStockDepthRight);
+            registerSetConfigCommand("v2u_set_vstock_depth_up", _configVirtualStockDepthUp);
             registerSetConfigCommand("v2u_set_vstock_shoulder_max_distance", _configVirtualStockShoulderMaxDistance);
 
             registerSetConfigCommand("v2u_set_Melee_spherecast_radius", _configMeleeHandSphereCastRadius);
@@ -1223,7 +1276,7 @@ namespace Vertigo2Unleashed
         }
 
         private static MeleeResult DoMelee(VertigoHand hand, float hitDistance, Collider hitCollider, Vector3 hitPoint,
-            Vector3 hitNormal, Vector3 velocity, Vector3 hitDir)
+            Vector3 hitNormal, Vector3 velocity, Vector3 hitDir, ref BulletDecalProfile impactDecal)
         {
             if (hitDistance > _configMeleeMaxDistance.Value)
             {
@@ -1239,14 +1292,13 @@ namespace Vertigo2Unleashed
 
             var vertigoEntity = vertigoHittable.GetLinkedEntity();
 
-            if (vertigoEntity == null ||
-                vertigoEntity is VertigoPlayer ||
+            if (vertigoEntity is VertigoPlayer ||
                 vertigoEntity == hand.otherHand ||
                 hitCollider.GetComponentInParent<HeldEquippablePhysical>() != null ||
                 (hand.attachedInteractable != null &&
-                 vertigoEntity.gameObject == hand.attachedInteractable.gameObject) ||
+                 vertigoEntity?.gameObject == hand.attachedInteractable.gameObject) ||
                 (hand.otherHand.attachedInteractable != null &&
-                 vertigoEntity.gameObject == hand.otherHand.attachedInteractable.gameObject))
+                 vertigoEntity?.gameObject == hand.otherHand.attachedInteractable.gameObject))
             {
                 return MeleeResult.Nothing;
             }
@@ -1267,6 +1319,16 @@ namespace Vertigo2Unleashed
                 BulletHitAudioManager.HitSuccess(enemy.GetEnemyType(), hitPoint);
                 return MeleeResult.HitEnemy;
             }
+
+            // TODO: not working :(
+
+            var hit = new Bullet.BulletHit(hitPoint, hitNormal, hitCollider, hitCollider.attachedRigidbody);
+            if (impactDecal == null)
+            {
+                impactDecal = ScriptableObject.CreateInstance<BulletDecalProfile>();
+            }
+
+            impactDecal.SpawnDecal(hit);
 
             BulletHitAudioManager.HitSurface(hitCollider.sharedMaterial, hitPoint, 1.0f);
             return MeleeResult.HitSomething;
@@ -1295,6 +1357,7 @@ namespace Vertigo2Unleashed
         private class MeleeCollisionComponent : MonoBehaviour
         {
             public HeldEquippablePhysical Parent;
+            private BulletDecalProfile _impactDecal;
 
 #pragma warning disable IDE0051
             // ReSharper disable once UnusedMember.Local
@@ -1319,7 +1382,7 @@ namespace Vertigo2Unleashed
                 var contact = other.contacts[0];
 
                 var meleeResult = DoMelee(hand, contact.separation, other.collider, contact.point, contact.normal,
-                    gunVelocity, gunVelocity.normalized);
+                    gunVelocity, gunVelocity.normalized, ref _impactDecal);
 
                 if (meleeResult != MeleeResult.Nothing)
                 {
@@ -1370,6 +1433,8 @@ namespace Vertigo2Unleashed
             return true;
         }
 
+        private static BulletDecalProfile _handImpactDecal;
+
         [HarmonyPatch(typeof(VertigoHand), "FixedUpdate")]
         [HarmonyPrefix]
         [SuppressMessage("ReSharper", "InconsistentNaming")]
@@ -1396,7 +1461,7 @@ namespace Vertigo2Unleashed
             foreach (var hit in results)
             {
                 var meleeResult = DoMelee(__instance, hit.distance, hit.collider, hit.point, hit.normal,
-                    __instance.velocity, -__instance.velocity.normalized);
+                    __instance.velocity, -__instance.velocity.normalized, ref _handImpactDecal);
 
                 if (meleeResult != MeleeResult.Nothing)
                 {
